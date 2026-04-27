@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var coordinator: DictationCoordinator?
     private var menuBar: MenuBarController?
     private var onboarding: OnboardingWindowController?
+    private var updaterController: UpdaterController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 不依赖 UserPreferences flag：每次启动直接查实际权限。
@@ -18,7 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showOnboarding()
             return
         }
-        ApplicationMenu.install()
+        let updater = UpdaterController()
+        self.updaterController = updater
+        ApplicationMenu.install(updaterTarget: updater)
         let coordinator = DictationCoordinator()
         let menuBar = MenuBarController(coordinator: coordinator)
         coordinator.menuBar = menuBar

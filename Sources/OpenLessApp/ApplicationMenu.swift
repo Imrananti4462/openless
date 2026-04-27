@@ -2,11 +2,23 @@ import AppKit
 
 @MainActor
 enum ApplicationMenu {
-    static func install() {
+    static func install(updaterTarget: UpdaterController? = nil) {
         let mainMenu = NSMenu()
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu(title: "OpenLess")
+
+        if let updaterTarget {
+            let checkUpdates = NSMenuItem(
+                title: "检查更新…",
+                action: #selector(UpdaterController.checkForUpdates(_:)),
+                keyEquivalent: ""
+            )
+            checkUpdates.target = updaterTarget
+            appMenu.addItem(checkUpdates)
+            appMenu.addItem(.separator())
+        }
+
         appMenu.addItem(NSMenuItem(title: "Hide OpenLess", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
         appMenu.addItem(NSMenuItem(title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h"))
         appMenu.items.last?.keyEquivalentModifierMask = [.command, .option]

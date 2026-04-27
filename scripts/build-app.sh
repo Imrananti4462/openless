@@ -12,6 +12,12 @@ BUILD_DIR="build"
 APP_DIR="${BUILD_DIR}/${APP_NAME}.app"
 BIN_DIR="${APP_DIR}/Contents/MacOS"
 RES_DIR="${APP_DIR}/Contents/Resources"
+FRAMEWORKS_DIR="${APP_DIR}/Contents/Frameworks"
+
+# Sparkle 自动更新：appcast 文件的公开 URL + 锁定签名所用的 EdDSA 公钥。
+# 公钥永远公开（验证下载内容用），私钥只在本机 Keychain，不进仓库。
+SPARKLE_FEED_URL="https://raw.githubusercontent.com/appergb/openless/main/appcast.xml"
+SPARKLE_PUBLIC_KEY="iT00+eUw/55obn1suEnWqI7za2pc8mHIFIdRbOWXW1Q="
 
 echo "[build-app] generate app icon"
 swift scripts/generate-app-icon.swift
@@ -24,10 +30,18 @@ BIN_SRC=".build/release/${APP_NAME}"
 
 echo "[build-app] assemble bundle at ${APP_DIR}"
 rm -rf "${APP_DIR}"
-mkdir -p "${BIN_DIR}" "${RES_DIR}"
+mkdir -p "${BIN_DIR}" "${RES_DIR}" "${FRAMEWORKS_DIR}"
 cp "${BIN_SRC}" "${BIN_DIR}/${APP_NAME}"
 cp "Resources/AppIcon.icns" "${RES_DIR}/AppIcon.icns"
 cp "Resources/AppIcon.png" "${RES_DIR}/AppIcon.png"
+
+# 嵌入 Sparkle.framework（含 Updater.app + XPC services + Autoupdate）。
+# SPM 把 xcframework 解压到 .build/artifacts/sparkle/Sparkle/Sparkle.xcframework/，
+# 选 macos-arm64_x86_64 那个 slice。整个 framework 一次性 cp -R 进去。
+SPARKLE_FRAMEWORK_SRC=".build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+[ -d "${SPARKLE_FRAMEWORK_SRC}" ] || { echo "missing ${SPARKLE_FRAMEWORK_SRC} — 跑过 swift build 没？"; exit 1; }
+echo "[build-app] embed Sparkle.framework"
+cp -R "${SPARKLE_FRAMEWORK_SRC}" "${FRAMEWORKS_DIR}/Sparkle.framework"
 
 cat > "${APP_DIR}/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -58,11 +72,34 @@ cat > "${APP_DIR}/Contents/Info.plist" <<EOF
     <string>OpenLess 需要麦克风权限以录制您的语音并转写为文字。</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>OpenLess 需要权限以将转写后的文字插入到您当前光标所在的输入框。</string>
+    <key>SUFeedURL</key>
+    <string>${SPARKLE_FEED_URL}</string>
+    <key>SUPublicEDKey</key>
+    <string>${SPARKLE_PUBLIC_KEY}</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUEnableInstallerLauncherService</key>
+    <true/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>3600</integer>
 </dict>
 </plist>
 EOF
 
-echo "[build-app] ad-hoc code sign"
+echo "[build-app] ad-hoc code sign (含 Sparkle helpers)"
+# 顺序很重要：先签内层 helpers，最后签外层 .app；--deep 在 Sparkle 这种多层
+# bundle 上不可靠（某些 XPC 会被漏签），所以显式逐个签。
+SPARKLE_VERSIONS_DIR="${FRAMEWORKS_DIR}/Sparkle.framework/Versions/B"
+codesign --force --sign - --timestamp=none \
+    "${SPARKLE_VERSIONS_DIR}/XPCServices/Installer.xpc" 2>/dev/null || true
+codesign --force --sign - --timestamp=none \
+    "${SPARKLE_VERSIONS_DIR}/XPCServices/Downloader.xpc" 2>/dev/null || true
+codesign --force --sign - --timestamp=none \
+    "${SPARKLE_VERSIONS_DIR}/Updater.app" 2>/dev/null || true
+codesign --force --sign - --timestamp=none \
+    "${SPARKLE_VERSIONS_DIR}/Autoupdate" 2>/dev/null || true
+codesign --force --sign - --timestamp=none \
+    "${FRAMEWORKS_DIR}/Sparkle.framework"
 codesign --force --deep --sign - "${APP_DIR}"
 
 echo "[build-app] kill old app"
