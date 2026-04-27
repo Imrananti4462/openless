@@ -53,7 +53,8 @@ struct SettingsView: View {
     var body: some View {
         HStack(spacing: 0) {
             FixedSidebar(selection: $navigation.selection)
-            Divider()
+                .padding(.leading, 18)
+                .padding(.vertical, 18)
             Group {
                 switch navigation.selection {
                 case .home: HomeTab()
@@ -64,26 +65,32 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .background(WindowCanvasBackground())
         .frame(minWidth: 1040, minHeight: 700)
     }
 }
 
 private struct FixedSidebar: View {
     @Binding var selection: OpenLessMainTab
+    @State private var stats = SidebarStatsSnapshot.load()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 12) {
+            WindowControlGlassDock()
+
+            VStack(alignment: .leading, spacing: 7) {
                 Text("OpenLess")
-                    .font(.system(size: 24, weight: .semibold))
+                    .font(.system(size: 23, weight: .semibold))
                 Text("自然说话，完美书写")
-                    .font(.footnote)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 24)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassPanel(cornerRadius: 18)
 
-            VStack(spacing: 6) {
+            VStack(spacing: 8) {
                 ForEach(OpenLessMainTab.allCases) { tab in
                     Button {
                         selection = tab
@@ -99,17 +106,20 @@ private struct FixedSidebar: View {
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            selection == tab ? Color.accentColor.opacity(0.16) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        )
                         .foregroundStyle(selection == tab ? .primary : .secondary)
+                        .background(
+                            selection == tab ? Color.accentColor.opacity(0.13) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 15, style: .continuous)
+                        )
+                        .glassPanel(cornerRadius: 15)
                     }
                     .buttonStyle(.plain)
                     .help(tab.title)
                 }
             }
-            .padding(.horizontal, 12)
+
+            SidebarUsageCard(stats: stats)
+            SidebarConnectionCard(stats: stats)
 
             Spacer()
 
@@ -119,11 +129,207 @@ private struct FixedSidebar: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 18)
-            .padding(.bottom, 20)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassPanel(cornerRadius: 18)
         }
-        .frame(width: 224)
-        .background(.regularMaterial)
+        .padding(.horizontal, 12)
+        .padding(.top, 0)
+        .padding(.bottom, 12)
+        .frame(width: 264)
+        .glassPanel(cornerRadius: 32)
+        .onAppear { refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: .openLessHistoryChanged)) { _ in refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: .openLessDictionaryChanged)) { _ in refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: .openLessCredentialsChanged)) { _ in refresh() }
+    }
+
+    private func refresh() {
+        stats = SidebarStatsSnapshot.load()
+    }
+}
+
+private struct WindowCanvasBackground: View {
+    var body: some View {
+        ZStack {
+            Color(nsColor: .windowBackgroundColor)
+            LinearGradient(
+                colors: [
+                    Color.primary.opacity(0.035),
+                    Color.clear,
+                    Color.accentColor.opacity(0.035),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+        .ignoresSafeArea()
+    }
+}
+
+private struct WindowControlGlassDock: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .fill(Color.clear)
+            .frame(width: 92, height: 36)
+            .glassPanel(cornerRadius: 18)
+            .padding(.top, 2)
+            .padding(.leading, 2)
+            .help("窗口控制")
+    }
+}
+
+private struct SidebarUsageCard: View {
+    let stats: SidebarStatsSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack {
+                Label("今日概览", systemImage: "chart.bar.xaxis")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(stats.sessionCountText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            MiniUsageChart(values: stats.chartValues)
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                SidebarMetricBox(title: "时长", value: stats.durationText, symbol: "waveform")
+                SidebarMetricBox(title: "总字数", value: "\(stats.totalCharacters)", symbol: "number")
+                SidebarMetricBox(title: "每分钟", value: "\(stats.charactersPerMinute)", symbol: "speedometer")
+                SidebarMetricBox(title: "词条", value: "\(stats.dictionaryCount)", symbol: "text.book.closed")
+            }
+        }
+        .padding(13)
+        .glassPanel(cornerRadius: 20)
+    }
+}
+
+private struct SidebarConnectionCard: View {
+    let stats: SidebarStatsSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            SidebarConnectionRow(title: "ASR", detail: stats.hasVolcCredentials ? "已配置" : "待配置", ok: stats.hasVolcCredentials)
+            SidebarConnectionRow(title: "润色", detail: stats.hasArkCredentials ? "已配置" : "原文兜底", ok: stats.hasArkCredentials)
+        }
+        .padding(13)
+        .glassPanel(cornerRadius: 20)
+    }
+}
+
+private struct SidebarMetricBox: View {
+    let title: String
+    let value: String
+    let symbol: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Image(systemName: symbol)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, minHeight: 82, alignment: .leading)
+        .glassPanel(cornerRadius: 15)
+    }
+}
+
+private struct SidebarConnectionRow: View {
+    let title: String
+    let detail: String
+    let ok: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(ok ? Color.green : Color.orange)
+                .frame(width: 7, height: 7)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(ok ? .primary : .secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .glassPanel(cornerRadius: 13)
+    }
+}
+
+private struct MiniUsageChart: View {
+    let values: [Double]
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 5) {
+            ForEach(Array(values.enumerated()), id: \.offset) { _, value in
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.72))
+                    .frame(height: max(8, 44 * value))
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(10)
+        .frame(height: 66)
+        .glassPanel(cornerRadius: 15)
+    }
+}
+
+private struct SidebarStatsSnapshot {
+    let totalSeconds: Double
+    let totalCharacters: Int
+    let charactersPerMinute: Int
+    let dictionaryCount: Int
+    let hasVolcCredentials: Bool
+    let hasArkCredentials: Bool
+    let chartValues: [Double]
+    let sessionCount: Int
+
+    var durationText: String {
+        if totalSeconds < 60 {
+            return "\(Int(totalSeconds.rounded())) 秒"
+        }
+        return String(format: "%.1f 分", totalSeconds / 60)
+    }
+
+    var sessionCountText: String {
+        "\(sessionCount) 次"
+    }
+
+    static func load() -> SidebarStatsSnapshot {
+        let sessions = HistoryStore().recent(limit: 100)
+        let totalCharacters = sessions.reduce(0) { $0 + $1.finalText.count }
+        let actualMs = sessions.compactMap(\.durationMs).reduce(0, +)
+        let totalSeconds = actualMs > 0 ? Double(actualMs) / 1000 : Double(totalCharacters) / 240 * 60
+        let charactersPerMinute = totalSeconds > 0 ? Int((Double(totalCharacters) / totalSeconds * 60).rounded()) : 0
+        let recentCounts = Array(sessions.prefix(7).reversed()).map { Double(max($0.finalText.count, 1)) }
+        let maxCount = recentCounts.max() ?? 1
+        let chartValues = recentCounts.isEmpty ? Array(repeating: 0.18, count: 7) : recentCounts.map { $0 / maxCount }
+        let vault = CredentialsVault.shared
+
+        return SidebarStatsSnapshot(
+            totalSeconds: totalSeconds,
+            totalCharacters: totalCharacters,
+            charactersPerMinute: charactersPerMinute,
+            dictionaryCount: DictionaryStore().enabledEntries().count,
+            hasVolcCredentials: isFilled(vault.get(CredentialAccount.volcengineAppKey)) && isFilled(vault.get(CredentialAccount.volcengineAccessKey)),
+            hasArkCredentials: isFilled(vault.get(CredentialAccount.arkApiKey)),
+            chartValues: chartValues,
+            sessionCount: sessions.count
+        )
     }
 }
 
@@ -1165,6 +1371,7 @@ private struct PrivacyTab: View {
 }
 
 extension Notification.Name {
+    static let openLessHistoryChanged = Notification.Name("openless.history_changed")
     static let openLessHotkeyChanged = Notification.Name("openless.hotkey_changed")
     static let openLessCredentialsChanged = Notification.Name("openless.credentials_changed")
     static let openLessDictionaryChanged = Notification.Name("openless.dictionary_changed")

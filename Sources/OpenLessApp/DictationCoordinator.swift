@@ -438,6 +438,7 @@ final class DictationCoordinator {
             dictionaryEntryCount: dictionaryEntryCount
         )
         history.save(session)
+        NotificationCenter.default.post(name: .openLessHistoryChanged, object: nil)
     }
 
     // MARK: - 凭据读取（全部走内存快照，不打 Keychain）
