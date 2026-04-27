@@ -8,6 +8,7 @@ public final class UserPreferences: @unchecked Sendable {
     private enum Key {
         static let polishMode = "openless.polish_mode"
         static let hotkeyTrigger = "openless.hotkey_trigger"
+        static let hotkeyMode = "openless.hotkey_mode"
         static let hasCompletedOnboarding = "openless.onboarding_completed"
     }
 
@@ -27,6 +28,14 @@ public final class UserPreferences: @unchecked Sendable {
             return HotkeyBinding.Trigger(rawValue: raw) ?? .rightOption
         }
         set { defaults.set(newValue.rawValue, forKey: Key.hotkeyTrigger) }
+    }
+
+    public var hotkeyMode: HotkeyMode {
+        get {
+            let raw = defaults.string(forKey: Key.hotkeyMode) ?? HotkeyMode.toggle.rawValue
+            return HotkeyMode(rawValue: raw) ?? .toggle
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.hotkeyMode) }
     }
 
     public var hasCompletedOnboarding: Bool {

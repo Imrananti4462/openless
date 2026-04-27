@@ -83,6 +83,8 @@ public struct CapsuleView: View {
             statusText("已复制 ⌘V", color: .secondary)
         case .error(let msg):
             statusText(msg, color: .red)
+        case .warning(let msg):
+            statusText(msg, color: .orange)
         case .hidden:
             EmptyView()
         }

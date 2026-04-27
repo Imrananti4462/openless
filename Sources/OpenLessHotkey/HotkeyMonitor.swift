@@ -12,8 +12,8 @@ public final class HotkeyMonitor: HotkeyServiceProtocol {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var triggerHeld = false
-    /// Toggle 状态：每次触发键按下时发出 .toggled。
-    /// 主链路侧负责把第一次 toggled 解释为"开始"，第二次为"结束"。
+    /// 边沿事件：触发键按下时发 .pressed，松开时发 .released。
+    /// toggle / hold 的解释由协调器侧（DictationCoordinator）按用户偏好做。
 
     public init() {
         var captured: AsyncStream<HotkeyEvent>.Continuation!
@@ -105,9 +105,10 @@ public final class HotkeyMonitor: HotkeyServiceProtocol {
 
         if triggerActive && !triggerHeld {
             triggerHeld = true
-            continuation.yield(.toggled)
+            continuation.yield(.pressed)
         } else if !triggerActive && triggerHeld {
             triggerHeld = false
+            continuation.yield(.released)
         }
 
         // fn 默认拦截，规避系统 Globe 行为

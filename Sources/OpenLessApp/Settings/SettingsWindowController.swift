@@ -22,7 +22,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         win.titleVisibility = .hidden
         win.titlebarAppearsTransparent = true
         win.toolbar = nil
-        win.isMovableByWindowBackground = true
+        // 只允许拖动原生顶栏区域（含 traffic lights 那条带）；
+        // 否则 TextField 上的拖选手势会被整窗拖动吞掉。
+        win.isMovableByWindowBackground = false
         win.setContentSize(NSSize(width: 1040, height: 700))
         win.contentMinSize = NSSize(width: 960, height: 640)
         win.tabbingMode = .disallowed

@@ -3,6 +3,8 @@ import XCTest
 
 final class HotkeyEventTests: XCTestCase {
     func test_eventsAreDistinct() {
-        XCTAssertNotEqual(HotkeyEvent.toggled, .cancelled)
+        XCTAssertNotEqual(HotkeyEvent.pressed, .released)
+        XCTAssertNotEqual(HotkeyEvent.pressed, .cancelled)
+        XCTAssertNotEqual(HotkeyEvent.released, .cancelled)
     }
 }

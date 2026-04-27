@@ -33,6 +33,8 @@ final class DictationCoordinator {
     private var asr: VolcengineStreamingASR?
     private var audioConsumer: BufferingAudioConsumer?
     private var sessionStartedAt: Date = Date()
+    /// hold 模式下，Esc 取消后下一次 .released 应被忽略（否则会再次触发结束流程）。
+    private var suppressNextRelease = false
 
     /// 启动时一次性读 Keychain 缓存的凭据快照；会话热路径只读这里，
     /// 不再每次都打 SecItemCopyMatching 触发钥匙串弹窗。
@@ -138,8 +140,10 @@ final class DictationCoordinator {
             guard let self else { return }
             for await event in self.hotkey.events {
                 switch event {
-                case .toggled:
-                    self.handleToggle()
+                case .pressed:
+                    self.handlePressed()
+                case .released:
+                    self.handleReleased()
                 case .cancelled:
                     self.handleCancel()
                 }
@@ -147,7 +151,46 @@ final class DictationCoordinator {
         }
     }
 
-    // MARK: - Toggle 状态机
+    // MARK: - Toggle / Hold 状态机
+
+    private func handlePressed() {
+        switch UserPreferences.shared.hotkeyMode {
+        case .toggle:
+            handleToggle()
+        case .hold:
+            handleHoldStart()
+        }
+    }
+
+    private func handleReleased() {
+        guard UserPreferences.shared.hotkeyMode == .hold else { return }
+        if suppressNextRelease {
+            suppressNextRelease = false
+            return
+        }
+        switch sessionPhase {
+        case .listening:
+            sessionPhase = .processing
+            Task { await endSession() }
+        case .starting:
+            // 用户没等到 ASR 连上就松手 — 当作取消，不发送任何已采集音频。
+            Log.write("[session] hold: starting 阶段松手，取消")
+            handleCancel()
+        case .idle, .processing:
+            return
+        }
+    }
+
+    private func handleHoldStart() {
+        switch sessionPhase {
+        case .idle:
+            sessionPhase = .starting
+            Task { await beginSession() }
+        case .starting, .listening, .processing:
+            // hold 模式下重复 .pressed 通常来自系统自动重发；忽略即可。
+            return
+        }
+    }
 
     private func handleToggle() {
         switch sessionPhase {
@@ -173,6 +216,10 @@ final class DictationCoordinator {
         recorder.stop()
         audioConsumer?.clear()
         audioConsumer = nil
+        // hold 模式：如果用户还按着键，松手时会再来一次 .released —— 屏蔽掉，避免再次触发结束。
+        if UserPreferences.shared.hotkeyMode == .hold {
+            suppressNextRelease = true
+        }
         capsule.update(state: .cancelled)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             self?.capsule.update(state: .hidden)
@@ -291,6 +338,21 @@ final class DictationCoordinator {
         }
     }
 
+    /// 润色环节实际发生了什么。决定胶囊提示色调和历史记录的真实 mode。
+    private enum PolishOutcome {
+        case ok                       // 真润色完成
+        case skippedNoCredentials     // 没填 Ark，直接跳过
+        case failed(String)           // 调到了，但报错；error 文本仅作日志
+
+        var logTag: String {
+            switch self {
+            case .ok: return "ok"
+            case .skippedNoCredentials: return "skip-no-creds"
+            case .failed(let msg): return "failed(\(msg.prefix(120)))"
+            }
+        }
+    }
+
     private func polishAndInsert(
         raw: RawTranscript,
         originalRawText: String? = nil,
@@ -300,13 +362,14 @@ final class DictationCoordinator {
         let savedRaw = originalRawText ?? raw.text
 
         guard let arkCreds = loadArkCredentials() else {
-            Log.write("缺少 Ark 凭据；直接用 raw 插入")
+            Log.write("[polish] 缺少 Ark 凭据；跳过润色，插入 raw")
             await insertText(
                 text: raw.text,
                 raw: savedRaw,
                 mode: mode,
                 durationMs: raw.durationMs,
-                dictionaryEntryCount: dictionaryEntries.count
+                dictionaryEntryCount: dictionaryEntries.count,
+                polishOutcome: .skippedNoCredentials
             )
             return
         }
@@ -324,20 +387,18 @@ final class DictationCoordinator {
                 raw: savedRaw,
                 mode: mode,
                 durationMs: raw.durationMs,
-                dictionaryEntryCount: dictionaryEntries.count
+                dictionaryEntryCount: dictionaryEntries.count,
+                polishOutcome: .ok
             )
         } catch {
-            Log.write("[polish] 失败: \(error)；fallback 用 raw")
-            // 让用户知道润色失败（最常见原因：Ark 模型 ID 写错）。
-            // 1.5s 提示后用 raw 兜底插入，避免用户以为是"整理完成"。
-            capsule.update(state: .error("整理失败 用原文"))
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            Log.write("[polish] 失败: \(error)；插入 raw")
             await insertText(
                 text: raw.text,
                 raw: savedRaw,
                 mode: mode,
                 durationMs: raw.durationMs,
-                dictionaryEntryCount: dictionaryEntries.count
+                dictionaryEntryCount: dictionaryEntries.count,
+                polishOutcome: .failed(String(describing: error))
             )
         }
     }
@@ -347,7 +408,8 @@ final class DictationCoordinator {
         raw: String,
         mode: PolishMode,
         durationMs: Int?,
-        dictionaryEntryCount: Int
+        dictionaryEntryCount: Int,
+        polishOutcome: PolishOutcome = .ok
     ) async {
         let result = await inserter.insert(text)
         let frontApp = NSWorkspace.shared.frontmostApplication
@@ -355,14 +417,20 @@ final class DictationCoordinator {
         if !learned.isEmpty {
             Log.write("[dictionary] 自动学习：\(learned.map { $0.phrase }.joined(separator: ", "))")
         }
+        // 润色没真跑时，历史里的 mode 应反映「实际只是 raw」，避免误导。
+        let savedMode: PolishMode
+        switch polishOutcome {
+        case .ok: savedMode = mode
+        case .skippedNoCredentials, .failed: savedMode = .raw
+        }
         switch result {
         case .inserted:
-            capsule.update(state: .inserted)
-            Log.write("[insert] OK")
+            capsule.update(state: capsuleStateForInsert(polishOutcome))
+            Log.write("[insert] OK (polish=\(polishOutcome.logTag))")
             saveSession(
                 raw: raw,
                 final: text,
-                mode: mode,
+                mode: savedMode,
                 app: frontApp,
                 status: .inserted,
                 errorCode: nil,
@@ -370,12 +438,12 @@ final class DictationCoordinator {
                 dictionaryEntryCount: dictionaryEntryCount
             )
         case .copiedFallback(let reason):
-            capsule.update(state: .copied)
-            Log.write("[insert] fallback: \(reason)")
+            capsule.update(state: capsuleStateForCopy(polishOutcome))
+            Log.write("[insert] fallback: \(reason) (polish=\(polishOutcome.logTag))")
             saveSession(
                 raw: raw,
                 final: text,
-                mode: mode,
+                mode: savedMode,
                 app: frontApp,
                 status: .copiedFallback,
                 errorCode: reason,
@@ -388,6 +456,22 @@ final class DictationCoordinator {
         // - "已插入"也保留较长时间，避免视觉一闪而过
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
             self?.capsule.update(state: .hidden)
+        }
+    }
+
+    private func capsuleStateForInsert(_ outcome: PolishOutcome) -> CapsuleState {
+        switch outcome {
+        case .ok: return .inserted
+        case .skippedNoCredentials: return .warning("已插入原文 · 未润色")
+        case .failed: return .warning("润色失败 · 已用原文")
+        }
+    }
+
+    private func capsuleStateForCopy(_ outcome: PolishOutcome) -> CapsuleState {
+        switch outcome {
+        case .ok: return .copied
+        case .skippedNoCredentials: return .warning("已复制原文 · 未润色 ⌘V")
+        case .failed: return .warning("润色失败 · 已复制 ⌘V")
         }
     }
 

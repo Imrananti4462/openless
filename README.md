@@ -206,7 +206,6 @@ The record → transcribe → polish → insert state machine is owned exclusive
 
 Planned in the requirements docs but not in the 1.0 release:
 
-- Hold-to-talk mode (today only toggle).
 - Local ASR (today only Volcengine cloud).
 - Snippets (no UI / trigger logic yet).
 - History enhancements: copy button, search, re-polish, re-insert.
