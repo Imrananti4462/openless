@@ -72,83 +72,83 @@ struct SettingsView: View {
 private struct FixedSidebar: View {
     @Binding var selection: OpenLessMainTab
     @State private var stats = SidebarStatsSnapshot.load()
+    private let sidebarShape = RoundedRectangle(cornerRadius: 32, style: .continuous)
 
     var body: some View {
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 12) {
-                Color.clear
-                    .frame(height: 38)
-
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("OpenLess")
-                        .font(.system(size: 23, weight: .semibold))
-                        .foregroundStyle(.primary)
-                    Text("自然说话，完美书写")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-
-                VStack(spacing: 8) {
-                    ForEach(OpenLessMainTab.allCases) { tab in
-                        Button {
-                            selection = tab
-                        } label: {
-                            HStack(spacing: 11) {
-                                Image(systemName: tab.symbol)
-                                    .symbolRenderingMode(.hierarchical)
-                                    .foregroundStyle(selection == tab ? Color.accentColor : .secondary)
-                                    .frame(width: 22)
-                                Text(tab.title)
-                                    .font(.system(size: 14, weight: selection == tab ? .semibold : .regular))
-                                Spacer()
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .foregroundStyle(selection == tab ? .primary : .secondary)
-                            .background(
-                                selection == tab ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.035),
-                                in: RoundedRectangle(cornerRadius: 15, style: .continuous)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                    .strokeBorder(selection == tab ? Color.accentColor.opacity(0.32) : Color.primary.opacity(0.055), lineWidth: 1)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                        .help(tab.title)
-                    }
-                }
-
-                SidebarUsageCard(stats: stats)
-                SidebarConnectionCard(stats: stats)
-
-                VStack(alignment: .leading, spacing: 7) {
-                    Label("右 Option 开始录音", systemImage: "keyboard")
-                    Label("Esc 取消", systemImage: "escape")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 7) {
+                Text("OpenLess")
+                    .font(.system(size: 23, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text("自然说话，完美书写")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .padding(12)
+            .padding(.horizontal, 14)
+            .padding(.top, 50)
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(spacing: 8) {
+                        ForEach(OpenLessMainTab.allCases) { tab in
+                            Button {
+                                selection = tab
+                            } label: {
+                                HStack(spacing: 11) {
+                                    Image(systemName: tab.symbol)
+                                        .symbolRenderingMode(.hierarchical)
+                                        .foregroundStyle(selection == tab ? Color.blue : .secondary)
+                                        .frame(width: 22)
+                                    Text(tab.title)
+                                        .font(.system(size: 14, weight: selection == tab ? .semibold : .regular))
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .foregroundStyle(selection == tab ? .primary : .secondary)
+                                .background(
+                                    selection == tab ? Color.blue.opacity(0.10) : Color.primary.opacity(0.035),
+                                    in: RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .focusable(false)
+                            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                            .help(tab.title)
+                        }
+                    }
+
+                    SidebarUsageCard(stats: stats)
+                    SidebarConnectionCard(stats: stats)
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        Label("右 Option 开始录音", systemImage: "keyboard")
+                        Label("Esc 取消", systemImage: "escape")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
+            }
+            .scrollIndicators(.hidden)
         }
-        .scrollIndicators(.hidden)
         .frame(width: 264)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 32, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
-        )
+        .clipShape(sidebarShape)
+        .glassPanel(cornerRadius: 32)
+        .contentShape(sidebarShape)
         .onAppear { refresh() }
         .onReceive(NotificationCenter.default.publisher(for: .openLessHistoryChanged)) { _ in refresh() }
         .onReceive(NotificationCenter.default.publisher(for: .openLessDictionaryChanged)) { _ in refresh() }
