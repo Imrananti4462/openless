@@ -2,7 +2,7 @@ import AppKit
 
 enum StatusBarIcon {
     static func image() -> NSImage {
-        if let url = Bundle.main.url(forResource: "OpenLessStatusIcon", withExtension: "svg"),
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
            let image = NSImage(contentsOf: url) {
             image.size = NSSize(width: 18, height: 18)
             image.isTemplate = false
