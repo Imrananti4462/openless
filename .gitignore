@@ -11,3 +11,7 @@ ChatGPT Image*.jpg
 # Local config / secrets
 *.env
 config.local.json
+
+# Local working dirs that don't belong in the repo
+SC/
+promo/
