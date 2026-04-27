@@ -86,8 +86,10 @@ fi
 PUB_DATE=$(/bin/date -u +"%a, %d %b %Y %H:%M:%S +0000")
 DOWNLOAD_URL="https://github.com/appergb/openless/releases/download/v${VERSION}/${ZIP_NAME}"
 
-# 7. 在 appcast.xml 的 <channel> 顶部插入新 <item>
-NEW_ITEM=$(cat <<EOF
+# 7. 在 appcast.xml 的标记行后插入新 <item>
+TMP_ITEM=$(/usr/bin/mktemp)
+cat > "${TMP_ITEM}" <<EOF
+
         <item>
             <title>OpenLess ${VERSION}</title>
             <pubDate>${PUB_DATE}</pubDate>
@@ -102,20 +104,9 @@ NEW_ITEM=$(cat <<EOF
                 sparkle:edSignature="${EDSIG}" />
         </item>
 EOF
-)
-
-# 用 awk 在 <description>OpenLess update feed</description> 之后插入新 item
-TMP_APPCAST=$(/usr/bin/mktemp)
-/usr/bin/awk -v new_item="${NEW_ITEM}" '
-  /<description>OpenLess update feed<\/description>/ {
-    print
-    print ""
-    print new_item
-    next
-  }
-  { print }
-' "${APPCAST}" > "${TMP_APPCAST}"
-mv "${TMP_APPCAST}" "${APPCAST}"
+# sed 的 r 命令在匹配行后插入文件内容，比 awk -v 处理多行字符串更稳。
+/usr/bin/sed -i '' "/<description>OpenLess update feed<\/description>/r ${TMP_ITEM}" "${APPCAST}"
+rm -f "${TMP_ITEM}"
 echo "[release] appcast.xml 已追加 ${VERSION}"
 
 # 8. git commit + tag + push
