@@ -2,15 +2,17 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class SettingsWindowController {
+final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private let navigation = SettingsNavigationModel()
 
     func show(tab: OpenLessMainTab = .home) {
+        NSApp.setActivationPolicy(.regular)
         navigation.selection = tab
         if let window = window {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            alignTrafficLights(in: window)
             return
         }
         let hosting = NSHostingController(rootView: SettingsView(navigation: navigation))
@@ -26,6 +28,7 @@ final class SettingsWindowController {
         win.tabbingMode = .disallowed
         win.center()
         win.isReleasedWhenClosed = false
+        win.delegate = self
         self.window = win
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -33,6 +36,20 @@ final class SettingsWindowController {
             guard let win else { return }
             self?.alignTrafficLights(in: win)
         }
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        alignTrafficLights(in: window)
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        alignTrafficLights(in: window)
     }
 
     private func alignTrafficLights(in window: NSWindow) {

@@ -51,10 +51,8 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 18) {
             FixedSidebar(selection: $navigation.selection)
-                .padding(.leading, 18)
-                .padding(.vertical, 18)
             Group {
                 switch navigation.selection {
                 case .home: HomeTab()
@@ -65,6 +63,7 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .padding(18)
         .background(WindowCanvasBackground())
         .frame(minWidth: 1040, minHeight: 700)
     }
@@ -138,6 +137,7 @@ private struct FixedSidebar: View {
         .padding(.top, 0)
         .padding(.bottom, 12)
         .frame(width: 264)
+        .frame(maxHeight: .infinity, alignment: .top)
         .glassPanel(cornerRadius: 32)
         .onAppear { refresh() }
         .onReceive(NotificationCenter.default.publisher(for: .openLessHistoryChanged)) { _ in refresh() }
