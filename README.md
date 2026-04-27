@@ -1,15 +1,48 @@
 # OpenLess
 
-OpenLess 是一个原生 macOS 语音输入应用：把光标放在任意输入框，按下全局快捷键说话，OpenLess 会录音、转写、轻度整理，并把结果插入当前输入位置。插入失败时会自动复制到剪贴板，尽量保证“用户说过的话不丢”。
+> 中文 · [English](README.en.md)
+
+**面向 AI 时代的开源语音输入：把你说的话变成可直接用的 AI prompt。**
+
+OpenLess 是一个原生 macOS 语音输入应用，对标 [Wispr Flow](https://wisprflow.ai)、[Talk (Talktastic)](https://talktastic.com)、[Lazy](https://heylazy.com)、Superwhisper 等商业语音输入工具的**开源**替代品。
+
+把光标放在 ChatGPT、Claude、Cursor、Notion、邮件、聊天框任意输入框里，按一次全局快捷键说话——OpenLess 会录音、转写、按你选的模式润色，把结果直接插入光标位置。插入失败时会自动复制到剪贴板，尽量保证「你说过的话不丢」。
+
+## 为什么开源 OpenLess
+
+类似工具大多是商业 SaaS：每月订阅、不能自带模型、转写音频会上传到厂商服务器、词典和习惯沉淀在对方账户里。
+
+OpenLess 想做的是同一类体验，但是：
+
+- **完全开源、本地优先**。代码在仓库里，所有数据写在你的机器上。
+- **自带云凭据**。火山引擎 ASR + Ark / DeepSeek 兼容 chat-completions，不强绑某家。
+- **专门为 AI prompt 优化**。「清晰结构」模式会把零散口语补成有上下文、有约束、有要求的 prompt，复制粘贴就能直接喂给 ChatGPT / Claude / Cursor。
+- **不会替你回答**。模型只整理你的话，不会把「我们这个应用还有哪些功能没做？」变成一份功能清单——只会补成一句通顺的问题，让你拿去问真正的 AI。
+
+## 适用场景
+
+- 给 ChatGPT / Claude / Cursor / Gemini 写 prompt：口述一段需求，OpenLess 自动整理成结构化、有细节的 prompt。
+- 写邮件、写需求文档、写微信/Slack 长消息：去口癖、补标点、按段落整理。
+- 写代码注释、commit message、PR 描述：把脑子里的想法直接落到光标位置。
+- 任何「我懒得打字，但又必须输出书面文字」的场景。
 
 ## 项目方向
 
-OpenLess 只做一件事：**把语音变成可用的书面文字，落到当前光标位置。**
+OpenLess 只做一件事：**把语音变成可用的书面文字（尤其是 AI prompt），落到当前光标位置。**
 
 - 不做问答、不做任务执行、不做项目分析。
 - 不做对话上下文累积，每次输入都是独立的整理请求。
 - 输入语音 → 转写 → 整理 → 插入当前输入框。失败时复制到剪贴板。
 - 围绕这条主路径完善体验：模式选择、词典、历史、菜单栏、首页报告。
+
+## 对标参考
+
+| 工具 | 形态 | OpenLess 的差异 |
+| --- | --- | --- |
+| [Wispr Flow](https://wisprflow.ai) | 闭源 macOS / Windows，订阅制 | 开源；自带 ASR + LLM 凭据；专门暴露「AI prompt 整理」模式 |
+| [Talk (Talktastic)](https://talktastic.com) | 闭源 macOS，订阅制 | 开源；不绑厂商，凭据在本机 Keychain |
+| [Lazy](https://heylazy.com) | 闭源笔记/捕获工具 | 不做笔记容器，专做「插入到任意输入框」 |
+| [Superwhisper](https://superwhisper.com) | 闭源 macOS，订阅制 | 开源；目前云端 ASR 优先，本地 ASR 在 roadmap |
 
 ## 当前状态（v1.0）
 
@@ -17,7 +50,7 @@ OpenLess 只做一件事：**把语音变成可用的书面文字，落到当前
 - macOS 26+ 使用 Liquid Glass 效果，旧系统回退到系统 material。
 - 默认是切换式录音：按一次开始，再按一次结束；录音中按 `Esc` 取消。
 - 接入火山引擎流式 ASR 和 Ark / DeepSeek 兼容 Chat Completions 进行润色。
-- 4 种输出模式：原文、轻度润色、清晰结构、正式表达。
+- 4 种输出模式：原文、轻度润色、清晰结构（**AI prompt 模式**）、正式表达。
 - 主窗口按「首页 / 历史记录 / 词典 / 设置」组织；菜单栏常驻；底部有微型状态胶囊。
 - 词典支持作为 ASR 热词注入和润色阶段的语义判断。
 
