@@ -1,0 +1,13 @@
+.DS_Store
+.build/
+build/
+.swiftpm/
+*.xcodeproj
+Package.resolved
+xcuserdata/
+DerivedData/
+ChatGPT Image*.jpg
+
+# Local config / secrets
+*.env
+config.local.json
