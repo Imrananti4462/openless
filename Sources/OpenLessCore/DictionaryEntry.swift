@@ -43,6 +43,8 @@ public struct DictionaryEntry: Identifiable, Codable, Sendable, Equatable {
     public var source: DictionaryEntrySource
     public let createdAt: Date
     public var updatedAt: Date
+    /// 润色后的最终输出里出现该词的累计次数。词汇表用它做使用频次展示。
+    public var hitCount: Int
 
     public init(
         id: UUID = UUID(),
@@ -52,7 +54,8 @@ public struct DictionaryEntry: Identifiable, Codable, Sendable, Equatable {
         enabled: Bool = true,
         source: DictionaryEntrySource = .manual,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        hitCount: Int = 0
     ) {
         self.id = id
         self.phrase = phrase
@@ -62,10 +65,29 @@ public struct DictionaryEntry: Identifiable, Codable, Sendable, Equatable {
         self.source = source
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.hitCount = hitCount
     }
 
     public var trimmedPhrase: String {
         phrase.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // 老的 dictionary.json 里没有 hitCount，解码时给个默认 0。
+    private enum CodingKeys: String, CodingKey {
+        case id, phrase, category, notes, enabled, source, createdAt, updatedAt, hitCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.phrase = try c.decode(String.self, forKey: .phrase)
+        self.category = try c.decode(DictionaryEntryCategory.self, forKey: .category)
+        self.notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        self.source = try c.decodeIfPresent(DictionaryEntrySource.self, forKey: .source) ?? .manual
+        self.createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        self.updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        self.hitCount = try c.decodeIfPresent(Int.self, forKey: .hitCount) ?? 0
     }
 }
 

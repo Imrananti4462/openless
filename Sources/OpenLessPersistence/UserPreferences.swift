@@ -7,12 +7,22 @@ public final class UserPreferences: @unchecked Sendable {
 
     private enum Key {
         static let polishMode = "openless.polish_mode"
+        static let polishEnabled = "openless.polish_enabled"
         static let hotkeyTrigger = "openless.hotkey_trigger"
         static let hotkeyMode = "openless.hotkey_mode"
         static let hasCompletedOnboarding = "openless.onboarding_completed"
     }
 
     public init() {}
+
+    /// 风格全局开关。关闭时识别后直接插入原文，不调润色模型。默认开。
+    public var polishEnabled: Bool {
+        get {
+            if defaults.object(forKey: Key.polishEnabled) == nil { return true }
+            return defaults.bool(forKey: Key.polishEnabled)
+        }
+        set { defaults.set(newValue, forKey: Key.polishEnabled) }
+    }
 
     public var polishMode: PolishMode {
         get {

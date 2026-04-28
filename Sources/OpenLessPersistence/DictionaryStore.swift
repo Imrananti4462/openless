@@ -52,31 +52,48 @@ public final class DictionaryStore: @unchecked Sendable {
         saveLocked(entries)
     }
 
+    /// 扫描润色后文本：每个启用词条只要在文本里出现就 +1（同一次输出最多 +1）。
+    /// 返回这次新增命中的 phrase，方便日志。
     @discardableResult
-    public func learnTerms(from text: String) -> [DictionaryEntry] {
+    public func incrementHits(matching text: String) -> [String] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
         lock.lock()
         defer { lock.unlock() }
 
         var entries = loadAll()
-        let existing = Set(entries.map { $0.trimmedPhrase.lowercased() })
-        let candidates = Self.extractLearnableTerms(from: text)
-            .filter { !existing.contains($0.lowercased()) }
-            .prefix(8)
-
-        let learned = candidates.map {
-            DictionaryEntry(
-                phrase: $0,
-                category: .learned,
-                notes: "自动从历史输入中学习，可作为后续 ASR 热词和语义判断候选。",
-                enabled: true,
-                source: .automatic
-            )
+        let lowerText = trimmed.lowercased()
+        var hit: [String] = []
+        for index in entries.indices {
+            guard entries[index].enabled else { continue }
+            let phrase = entries[index].trimmedPhrase
+            guard !phrase.isEmpty else { continue }
+            if lowerText.contains(phrase.lowercased()) {
+                entries[index].hitCount += 1
+                hit.append(phrase)
+            }
         }
-        if !learned.isEmpty {
-            entries.insert(contentsOf: learned, at: 0)
+        if !hit.isEmpty {
             saveLocked(entries)
         }
-        return Array(learned)
+        return hit
+    }
+
+    public func resetHits() {
+        lock.lock()
+        defer { lock.unlock() }
+        var entries = loadAll()
+        for index in entries.indices {
+            entries[index].hitCount = 0
+        }
+        saveLocked(entries)
+    }
+
+    public func clearAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        saveLocked([])
     }
 
     private func loadAll() -> [DictionaryEntry] {
@@ -92,28 +109,5 @@ public final class DictionaryStore: @unchecked Sendable {
         if let data = try? encoder.encode(sorted) {
             try? data.write(to: fileURL, options: .atomic)
         }
-    }
-
-    private static func extractLearnableTerms(from text: String) -> [String] {
-        let pattern = #"[A-Za-z][A-Za-z0-9_.+#-]{2,}"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        let matches = regex.matches(in: text, range: range)
-        let stopwords: Set<String> = [
-            "and", "the", "for", "with", "from", "this", "that", "you", "your",
-            "http", "https", "www", "com", "app", "api", "json", "true", "false"
-        ]
-
-        var result: [String] = []
-        var seen = Set<String>()
-        for match in matches {
-            guard let tokenRange = Range(match.range, in: text) else { continue }
-            let token = String(text[tokenRange])
-            let lower = token.lowercased()
-            let hasSignal = token.contains { $0.isUppercase } || token.contains { $0.isNumber } || token.contains(".") || token.contains("+") || token.contains("#")
-            guard hasSignal, !stopwords.contains(lower), seen.insert(lower).inserted else { continue }
-            result.append(token)
-        }
-        return result
     }
 }

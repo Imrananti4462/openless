@@ -8,7 +8,9 @@ final class CapsuleWindowController {
     private let hostingView: NSHostingView<CapsuleView>
     private var currentState: CapsuleState = .hidden
     private var currentLevel: Float = 0
-    private let panelSize = NSSize(width: 196, height: 56)
+    // 比 CapsuleView (176×42) 留出足够空白，让 SwiftUI 的 .shadow（radius 18, y:8）
+    // 在 NSHostingView 内自然 fade 到透明，避免被 panel bounds 裁出一圈暗矩形。
+    private let panelSize = NSSize(width: 220, height: 96)
 
     var onCancel: () -> Void = {}
     var onConfirm: () -> Void = {}
@@ -26,7 +28,9 @@ final class CapsuleWindowController {
         )
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        // 系统阴影按 contentView 矩形 bounds 算，会和 SwiftUI 自带的胶囊阴影叠加成深色矩形边。
+        // SwiftUI 那一层已经够看，关掉系统阴影。
+        panel.hasShadow = false
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         // 必须接受鼠标点击，否则胶囊上的叉/勾按钮无法响应。
@@ -62,7 +66,9 @@ final class CapsuleWindowController {
         let screenFrame = screen.visibleFrame
         let size = window.frame.size
         let x = screenFrame.midX - size.width / 2
-        let y = screenFrame.minY + 24
+        // 旧版 panel(196×56) 时胶囊视觉中心位于 visibleFrame.minY + 52。
+        // 改大 panel 后保持视觉位置不变：y = 52 - panelHeight/2。
+        let y = screenFrame.minY + 52 - size.height / 2
         window.setFrameOrigin(NSPoint(x: x, y: y))
     }
 }

@@ -110,11 +110,12 @@ private struct InputBarChrome: ViewModifier {
 
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
+            // macOS 26 用真 Liquid Glass，自带的 elevation 已经够了；不再叠 SwiftUI 阴影，
+            // 否则胶囊外圈会出现一圈灰边（panel 透明区被阴影染色）。
             content
                 .overlay(
                     Capsule().strokeBorder(Color.white.opacity(0.34), lineWidth: 1)
                 )
-                .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
         } else {
             content
                 .background(Color.white.opacity(0.18), in: Capsule())

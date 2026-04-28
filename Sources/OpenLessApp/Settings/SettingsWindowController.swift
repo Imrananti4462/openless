@@ -60,11 +60,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             window.standardWindowButton(.miniaturizeButton),
             window.standardWindowButton(.zoomButton),
         ]
+        // 侧边栏左边距 12pt；红绿灯距侧边栏左边 ~8pt → 距窗口左 20pt。
         for (index, button) in buttons.compactMap({ $0 }).enumerated() {
             var frame = button.frame
-            frame.origin.x = 34 + CGFloat(index) * 24
+            frame.origin.x = 20 + CGFloat(index) * 22
             if let superview = button.superview, superview.bounds.height > 80 {
-                frame.origin.y = superview.bounds.height - 38
+                frame.origin.y = superview.bounds.height - 34
             }
             button.frame = frame
         }

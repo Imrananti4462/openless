@@ -68,7 +68,7 @@ final class MenuBarController {
         history.target = actions
         menu.addItem(history)
 
-        let dictionary = NSMenuItem(title: "打开词典…", action: #selector(MenuActions.openDictionary), keyEquivalent: "")
+        let dictionary = NSMenuItem(title: "打开词汇表…", action: #selector(MenuActions.openDictionary), keyEquivalent: "")
         dictionary.target = actions
         menu.addItem(dictionary)
 

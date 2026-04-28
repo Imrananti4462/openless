@@ -361,6 +361,20 @@ final class DictationCoordinator {
         let mode = UserPreferences.shared.polishMode
         let savedRaw = originalRawText ?? raw.text
 
+        // 风格关闭时直接插入原文，不调 Ark。
+        guard UserPreferences.shared.polishEnabled else {
+            Log.write("[polish] 风格已关闭；跳过润色，插入 raw")
+            await insertText(
+                text: raw.text,
+                raw: savedRaw,
+                mode: mode,
+                durationMs: raw.durationMs,
+                dictionaryEntryCount: dictionaryEntries.count,
+                polishOutcome: .skippedNoCredentials
+            )
+            return
+        }
+
         guard let arkCreds = loadArkCredentials() else {
             Log.write("[polish] 缺少 Ark 凭据；跳过润色，插入 raw")
             await insertText(
@@ -413,9 +427,11 @@ final class DictationCoordinator {
     ) async {
         let result = await inserter.insert(text)
         let frontApp = NSWorkspace.shared.frontmostApplication
-        let learned = dictionary.learnTerms(from: text)
-        if !learned.isEmpty {
-            Log.write("[dictionary] 自动学习：\(learned.map { $0.phrase }.joined(separator: ", "))")
+        // 命中次数：润色后的最终文本里出现的启用词条 +1，词汇表里展示用。
+        let hits = dictionary.incrementHits(matching: text)
+        if !hits.isEmpty {
+            Log.write("[dictionary] 命中：\(hits.joined(separator: ", "))")
+            NotificationCenter.default.post(name: .openLessDictionaryChanged, object: nil)
         }
         // 润色没真跑时，历史里的 mode 应反映「实际只是 raw」，避免误导。
         let savedMode: PolishMode
