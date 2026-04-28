@@ -9,9 +9,9 @@ struct HelpTab: View {
             subtitle: "快速上手 OpenLess、查阅快捷键、检查授权状态、跳转到文档与反馈渠道。"
         ) {
             GlassSection(title: "快速上手", symbol: "play.circle") {
-                helpStep(num: 1, title: "配置火山 ASR", body: "在「火山 ASR」页面填入 APP ID 和 Access Token；没有 ASR 凭据时只能走演示模式。")
+                helpStep(num: 1, title: "配置火山 ASR", body: "在「设置」里填入火山 APP ID 和 Access Token；没有 ASR 凭据时只能走演示模式。")
                 DividerLine()
-                helpStep(num: 2, title: "（可选）配置润色", body: "「润色模式」页面填入 Ark API Key 后，识别结果会按所选模式润色；不填也能用，会直接插入原文。")
+                helpStep(num: 2, title: "（可选）配置润色", body: "在「设置」里填入 Ark API Key 后，识别结果会按「风格」中所选模式润色；不填也能用，会直接插入原文。")
                 DividerLine()
                 helpStep(num: 3, title: "授权辅助功能 + 麦克风", body: "首次启动会请求权限。授权后必须完全退出 OpenLess 再重新打开，全局快捷键才会生效。")
                 DividerLine()
@@ -29,7 +29,7 @@ struct HelpTab: View {
             GlassSection(title: "常见问题", symbol: "questionmark.bubble") {
                 helpFAQ(q: "全局快捷键没反应？", a: "确认「系统设置 → 隐私与安全 → 辅助功能」里 OpenLess 已勾选；首次授权之后必须完全退出再重启 App。")
                 DividerLine()
-                helpFAQ(q: "胶囊一直显示「演示」？", a: "缺少火山 ASR 凭据。到「火山 ASR」页面填入 APP ID + Access Token 即可。")
+                helpFAQ(q: "胶囊一直显示「演示」？", a: "缺少火山 ASR 凭据。到「设置」里填入 APP ID + Access Token 即可。")
                 DividerLine()
                 helpFAQ(q: "插入失败 / 只复制到剪贴板？", a: "目标 App 不支持 AX 写入或粘贴模拟。OpenLess 会自动降级为复制到剪贴板，按 ⌘V 粘贴即可。")
             }

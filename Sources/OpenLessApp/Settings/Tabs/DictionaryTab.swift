@@ -334,7 +334,8 @@ struct DictionaryEditorSheet: View {
                         notes: notes,
                         enabled: enabled,
                         source: entry?.source ?? .manual,
-                        createdAt: entry?.createdAt ?? Date()
+                        createdAt: entry?.createdAt ?? Date(),
+                        hitCount: entry?.hitCount ?? 0
                     ))
                     dismiss()
                 }
