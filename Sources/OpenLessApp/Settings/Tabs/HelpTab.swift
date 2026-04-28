@@ -27,17 +27,26 @@ struct HelpTab: View {
             }
 
             GlassSection(title: "常见问题", symbol: "questionmark.bubble") {
-                helpFAQ(q: "全局快捷键没反应？", a: "确认「系统设置 → 隐私与安全 → 辅助功能」里 OpenLess 已勾选；首次授权之后必须完全退出再重启 App。")
+                helpFAQ(
+                    q: "全局快捷键没反应？",
+                    a: "到「系统设置 → 隐私与安全 → 辅助功能」勾选 OpenLess。首次授权后必须完全退出再重启 App，全局快捷键才会生效。"
+                )
                 DividerLine()
-                helpFAQ(q: "胶囊一直显示「演示」？", a: "缺少火山 ASR 凭据。到「设置」里填入 APP ID + Access Token 即可。")
+                helpFAQ(
+                    q: "胶囊一直显示「演示」？",
+                    a: "缺少火山 ASR 凭据。到「设置」里填入 APP ID 和 Access Token 即可。"
+                )
                 DividerLine()
-                helpFAQ(q: "插入失败 / 只复制到剪贴板？", a: "目标 App 不支持 AX 写入或粘贴模拟。OpenLess 会自动降级为复制到剪贴板，按 ⌘V 粘贴即可。")
+                helpFAQ(
+                    q: "插入失败 / 只复制到剪贴板？",
+                    a: "目标 App 不支持 AX 写入或粘贴模拟。OpenLess 会自动降级为复制到剪贴板，按 ⌘V 粘贴即可。"
+                )
             }
 
             GlassSection(title: "更多", symbol: "link") {
-                helpLink(title: "GitHub 仓库", url: "https://github.com/baiqing/openless")
+                helpLink(title: "GitHub 仓库", url: "https://github.com/appergb/openless")
                 DividerLine()
-                helpLink(title: "提交问题或建议", url: "https://github.com/baiqing/openless/issues")
+                helpLink(title: "提交问题或建议", url: "https://github.com/appergb/openless/issues")
             }
         }
     }
@@ -73,26 +82,37 @@ struct HelpTab: View {
     }
 
     private func helpFAQ(q: String, a: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(q).font(.system(size: 14, weight: .semibold))
-            Text(a).font(.callout).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(q)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.primary)
+            Text(a)
+                .font(.callout)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+                .lineSpacing(2)
         }
-        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 11)
     }
 
+    /// 链接行：左标题、右图标按钮。
+    /// 之前把整段 URL 作为 label 渲染会被中间截断、和标题挤在一行，视觉很乱。
     private func helpLink(title: String, url: String) -> some View {
         HStack {
             Text(title)
             Spacer()
             if let parsed = URL(string: url) {
                 Link(destination: parsed) {
-                    Label(url, systemImage: "arrow.up.right.square")
-                        .font(.callout)
-                        .foregroundStyle(.blue)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    HStack(spacing: 5) {
+                        Text("打开")
+                            .font(.callout)
+                        Image(systemName: "arrow.up.right.square")
+                            .font(.system(size: 12))
+                    }
+                    .foregroundStyle(.blue)
                 }
+                .help(url)
             }
         }
         .padding(.vertical, 9)
