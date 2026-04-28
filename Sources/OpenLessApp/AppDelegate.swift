@@ -61,6 +61,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    @objc func checkForUpdates(_ sender: Any?) {
+        updaterController?.checkForUpdates(sender)
+    }
+
     private func runLaunchActions(coordinator: DictationCoordinator) {
         let arguments = Set(CommandLine.arguments.dropFirst())
         if arguments.contains("--open-settings") {
