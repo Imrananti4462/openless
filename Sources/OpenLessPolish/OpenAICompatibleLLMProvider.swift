@@ -144,6 +144,8 @@ public final class OpenAICompatibleLLMProvider: LLMProvider, @unchecked Sendable
         guard let content = message["content"] as? String else {
             throw LLMError.parseError("message.content is not a string")
         }
-        return content
+        // 即便 prompt 明令禁止"根据您给的内容，整理如下..."这类引导句，部分模型仍会顽固加；
+        // 客户端再扫一道，让插入到光标位置的永远是干净正文。
+        return PolishOutputCleaner.clean(content)
     }
 }

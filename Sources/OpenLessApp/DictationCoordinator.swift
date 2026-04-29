@@ -375,8 +375,14 @@ final class DictationCoordinator {
             return
         }
 
-        guard let arkCreds = loadArkCredentials() else {
-            Log.write("[polish] 缺少 Ark 凭据；跳过润色，插入 raw")
+        // 走 active LLM provider 通用路径（OpenAICompatibleLLMProvider）。
+        // 凭据缺失（apiKey 为空 / config 构造不出来）时静默降级为"插入 raw"，保持
+        // "用户的原话不会丢"这条不变量。
+        let vault = CredentialsVault.shared
+        let activeId = vault.activeLLMProviderId
+        guard let cfg = vault.llmProviderConfig(for: activeId),
+              !cfg.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            Log.write("[polish] active provider=\(activeId) 缺少 apiKey；跳过润色，插入 raw")
             await insertText(
                 text: raw.text,
                 raw: savedRaw,
@@ -388,16 +394,20 @@ final class DictationCoordinator {
             return
         }
 
-        Log.write("[polish] 调用 endpoint=\(arkCreds.endpoint.absoluteString) model=\(arkCreds.modelId)")
-        let polish = DoubaoPolishClient(
-            credentials: arkCreds,
+        // 词典条目里 enabled 的部分作为 hotwords 喂给 provider；hotwords 仅影响 prompt 后缀，
+        // 不影响热路径成本。
+        let hotwords = dictionaryEntries.map(\.phrase).filter { !$0.isEmpty }
+
+        Log.write("[polish] provider=\(activeId) baseURL=\(cfg.baseURL.absoluteString) model=\(cfg.model)")
+        let provider = OpenAICompatibleLLMProvider(
+            config: cfg,
             logger: { msg in Log.write(msg) }
         )
         do {
-            let final = try await polish.polish(rawTranscript: raw, mode: mode, dictionaryEntries: dictionaryEntries)
-            Log.write("[polish] mode=\(mode.rawValue) → \(final.text)")
+            let final = try await provider.polish(rawText: raw.text, mode: mode, hotwords: hotwords)
+            Log.write("[polish] mode=\(mode.rawValue) → \(final)")
             await insertText(
-                text: final.text,
+                text: final,
                 raw: savedRaw,
                 mode: mode,
                 durationMs: raw.durationMs,
@@ -556,11 +566,6 @@ final class DictationCoordinator {
         )
     }
 
-    private func loadArkCredentials() -> ArkCredentials? {
-        guard let key = credentials.arkApiKey, !key.isEmpty else { return nil }
-        let model = credentials.arkModelId ?? ArkCredentials.defaultModelId
-        let endpointStr = credentials.arkEndpoint ?? ArkCredentials.defaultEndpoint.absoluteString
-        let endpoint = URL(string: endpointStr) ?? ArkCredentials.defaultEndpoint
-        return ArkCredentials(apiKey: key, modelId: model, endpoint: endpoint)
-    }
+    // loadArkCredentials 已移除：润色路径改走 vault.llmProviderConfig(for:) +
+    // OpenAICompatibleLLMProvider，不再单独构造 ArkCredentials。
 }
