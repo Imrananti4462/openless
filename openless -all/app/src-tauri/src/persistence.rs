@@ -70,8 +70,7 @@ fn data_dir() -> Result<PathBuf> {
 }
 
 fn ensure_dir(dir: &Path) -> Result<()> {
-    fs::create_dir_all(dir)
-        .with_context(|| format!("create dir failed: {}", dir.display()))?;
+    fs::create_dir_all(dir).with_context(|| format!("create dir failed: {}", dir.display()))?;
     Ok(())
 }
 
@@ -83,8 +82,7 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     let tmp_path = path.with_extension("tmp");
     fs::write(&tmp_path, contents)
         .with_context(|| format!("write tmp failed: {}", tmp_path.display()))?;
-    fs::rename(&tmp_path, path)
-        .with_context(|| format!("rename failed: {}", path.display()))?;
+    fs::rename(&tmp_path, path).with_context(|| format!("rename failed: {}", path.display()))?;
     Ok(())
 }
 
@@ -92,8 +90,7 @@ fn read_or_default<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> Resul
     if !path.exists() {
         return Ok(T::default());
     }
-    let bytes = fs::read(path)
-        .with_context(|| format!("read failed: {}", path.display()))?;
+    let bytes = fs::read(path).with_context(|| format!("read failed: {}", path.display()))?;
     if bytes.is_empty() {
         return Ok(T::default());
     }
@@ -133,7 +130,9 @@ struct CredsRoot {
     providers: CredsProviders,
 }
 
-fn credsroot_default_version() -> u32 { 1 }
+fn credsroot_default_version() -> u32 {
+    1
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct CredsActive {
@@ -152,8 +151,12 @@ impl Default for CredsActive {
     }
 }
 
-fn creds_default_asr() -> String { "volcengine".into() }
-fn creds_default_llm() -> String { "ark".into() }
+fn creds_default_asr() -> String {
+    "volcengine".into()
+}
+fn creds_default_llm() -> String {
+    "ark".into()
+}
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 struct CredsProviders {
@@ -215,7 +218,11 @@ impl CredsLlmEntry {
             && self.baseURL.as_deref().unwrap_or("").is_empty()
             && self.model.as_deref().unwrap_or("").is_empty()
             && self.temperature.is_none()
-            && self.extraHeaders.as_ref().map(|h| h.is_empty()).unwrap_or(true)
+            && self
+                .extraHeaders
+                .as_ref()
+                .map(|h| h.is_empty())
+                .unwrap_or(true)
     }
 }
 
@@ -225,19 +232,22 @@ fn credentials_path() -> Result<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         let appdata = std::env::var("APPDATA").context("APPDATA not set")?;
-        return Ok(PathBuf::from(appdata).join("OpenLess").join(LEGACY_CREDS_FILE));
+        return Ok(PathBuf::from(appdata)
+            .join("OpenLess")
+            .join(LEGACY_CREDS_FILE));
     }
     #[cfg(not(target_os = "windows"))]
     {
         let home = std::env::var("HOME").context("HOME not set")?;
-        Ok(PathBuf::from(home).join(LEGACY_CREDS_DIR).join(LEGACY_CREDS_FILE))
+        Ok(PathBuf::from(home)
+            .join(LEGACY_CREDS_DIR)
+            .join(LEGACY_CREDS_FILE))
     }
 }
 
 fn ensure_credentials_dir(path: &Path) -> Result<()> {
     if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)
-            .with_context(|| format!("create dir {} failed", dir.display()))?;
+        fs::create_dir_all(dir).with_context(|| format!("create dir {} failed", dir.display()))?;
         // 0700 on parent so other users can't peek
         #[cfg(unix)]
         {
@@ -279,8 +289,7 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
     let json = serde_json::to_vec_pretty(&cleaned).context("encode credentials failed")?;
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, &json).with_context(|| format!("write {} failed", tmp.display()))?;
-    fs::rename(&tmp, &path)
-        .with_context(|| format!("rename to {} failed", path.display()))?;
+    fs::rename(&tmp, &path).with_context(|| format!("rename to {} failed", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -294,7 +303,9 @@ fn lookup_account(root: &CredsRoot, account: CredentialAccount) -> Option<String
     let llm = root.providers.llm.get(&root.active.llm);
     let pick = |s: &Option<String>| s.as_ref().filter(|v| !v.is_empty()).cloned();
     match account {
-        CredentialAccount::VolcengineAppKey => asr.and_then(|e| pick(&e.appKey).or_else(|| pick(&e.apiKey))),
+        CredentialAccount::VolcengineAppKey => {
+            asr.and_then(|e| pick(&e.appKey).or_else(|| pick(&e.apiKey)))
+        }
         CredentialAccount::VolcengineAccessKey => asr.and_then(|e| pick(&e.accessKey)),
         CredentialAccount::VolcengineResourceId => asr.and_then(|e| pick(&e.resourceId)),
         CredentialAccount::ArkApiKey => llm.and_then(|e| pick(&e.apiKey)),
@@ -570,7 +581,11 @@ impl CredentialsVault {
 
     pub fn set(account: CredentialAccount, value: &str) -> Result<()> {
         let mut root = load_credentials();
-        let v = if value.is_empty() { None } else { Some(value.to_string()) };
+        let v = if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        };
         write_account(&mut root, account, v);
         save_credentials(&root)
     }
@@ -593,4 +608,3 @@ impl CredentialsVault {
         }
     }
 }
-
