@@ -20,6 +20,8 @@ use cpal::{SampleFormat, StreamConfig};
 use parking_lot::Mutex;
 use thiserror::Error;
 
+use crate::permissions::{self, PermissionStatus};
+
 /// 目标采样率（与 Swift 端常量一致；不要改）。
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 /// 每多少个回调打一次诊断日志。
@@ -58,6 +60,24 @@ impl Recorder {
         consumer: Arc<dyn AudioConsumer>,
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
     ) -> Result<Self, RecorderError> {
+        let status = permissions::check_microphone();
+        if !matches!(
+            status,
+            PermissionStatus::Granted | PermissionStatus::NotApplicable
+        ) {
+            let requested = permissions::request_microphone();
+            if !matches!(
+                requested,
+                PermissionStatus::Granted | PermissionStatus::NotApplicable
+            ) {
+                log::warn!(
+                    "[recorder] microphone permission not granted: {:?}",
+                    requested
+                );
+                return Err(RecorderError::PermissionDenied);
+            }
+        }
+
         // 启动信号：子线程构造 Stream 完成后通过 startup_tx 报告结果。
         let (startup_tx, startup_rx) = channel::<Result<(), RecorderError>>();
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -345,12 +365,7 @@ fn downmix_to_mono(interleaved: &[f32], channels: usize) -> Vec<f32> {
 /// 算法说明：把上一回调的尾样本作为本回调起点，避免缝隙；用浮点
 /// `phase` 记录"已经走到上一帧的多少位置"，每输出一个目标样本前进
 /// `step = src_sr / dst_sr`。
-fn resample_to_target(
-    samples: &[f32],
-    src_sr: u32,
-    dst_sr: u32,
-    state: &StreamState,
-) -> Vec<f32> {
+fn resample_to_target(samples: &[f32], src_sr: u32, dst_sr: u32, state: &StreamState) -> Vec<f32> {
     if samples.is_empty() {
         return Vec::new();
     }

@@ -21,10 +21,14 @@ mod polish;
 mod recorder;
 mod types;
 
+#[cfg(target_os = "macos")]
+use std::sync::mpsc;
 use std::sync::Arc;
+#[cfg(target_os = "macos")]
+use std::time::Duration;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
-use tauri::{LogicalPosition, Manager};
+use tauri::{AppHandle, LogicalPosition, Manager, RunEvent, Runtime};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -51,7 +55,9 @@ pub fn run() {
             if let Some(main) = app.get_webview_window("main") {
                 #[cfg(target_os = "macos")]
                 {
-                    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+                    use window_vibrancy::{
+                        apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
+                    };
                     if let Err(e) = apply_vibrancy(
                         &main,
                         NSVisualEffectMaterial::HudWindow,
@@ -69,6 +75,8 @@ pub fn run() {
                     }
                 }
             }
+
+            show_main_window(app.handle());
 
             // 启动时主动弹 Accessibility 授权框（与 Swift `AppDelegate` 行为一致）。
             // 用户首次必看到系统提示；已授权则静默返回。
@@ -97,7 +105,11 @@ pub fn run() {
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        ..
+                    } = event
+                    {
                         show_main_window(tray.app_handle());
                     }
                 })
@@ -109,15 +121,6 @@ pub fn run() {
             coordinator.start_hotkey_listener();
 
             Ok(())
-        })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // 菜单栏 app：关闭主窗口仅隐藏，保留菜单栏入口。退出走 tray 菜单 → 退出。
-                if window.label() == "main" {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
-            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
@@ -140,12 +143,26 @@ pub fn run() {
             commands::check_accessibility_permission,
             commands::request_accessibility_permission,
             commands::check_microphone_permission,
+            commands::request_microphone_permission,
             commands::open_system_settings,
             commands::trigger_microphone_prompt,
             commands::read_credential,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| match event {
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen { .. } => show_main_window(app),
+            RunEvent::WindowEvent { label, event, .. } => {
+                if label == "main" {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        hide_main_window(app);
+                    }
+                }
+            }
+            _ => {}
+        });
 }
 
 /// 把日志同时写到 stderr + ~/Library/Logs/OpenLess/openless.log（match Swift `Log.swift`）。
@@ -157,9 +174,7 @@ fn init_file_logger() {
     let log_dir = log_dir_path();
     let _ = std::fs::create_dir_all(&log_dir);
     let log_file = log_dir.join("openless.log");
-    let config = ConfigBuilder::new()
-        .set_time_format_rfc3339()
-        .build();
+    let config = ConfigBuilder::new().set_time_format_rfc3339().build();
     let mut loggers: Vec<Box<dyn simplelog::SharedLogger>> = vec![TermLogger::new(
         LevelFilter::Info,
         config.clone(),
@@ -207,13 +222,96 @@ fn log_dir_path() -> std::path::PathBuf {
     std::env::temp_dir().join("OpenLess")
 }
 
-fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
+    activate_window_mode(app);
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
+    activate_app(app);
 }
+
+pub(crate) fn request_microphone_from_foreground<R: Runtime>(
+    app: &AppHandle<R>,
+) -> permissions::PermissionStatus {
+    show_main_window(app);
+    wait_for_app_activation(app);
+    permissions::request_microphone()
+}
+
+fn hide_main_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+    activate_menu_bar_mode(app);
+}
+
+#[cfg(target_os = "macos")]
+fn activate_window_mode<R: Runtime>(app: &AppHandle<R>) {
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+    let _ = app.set_dock_visibility(true);
+    let _ = app.show();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn activate_window_mode<R: Runtime>(_app: &AppHandle<R>) {}
+
+#[cfg(target_os = "macos")]
+fn activate_menu_bar_mode<R: Runtime>(app: &AppHandle<R>) {
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    let _ = app.set_dock_visibility(false);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn activate_menu_bar_mode<R: Runtime>(_app: &AppHandle<R>) {}
+
+#[cfg(target_os = "macos")]
+fn activate_app<R: Runtime>(app: &AppHandle<R>) {
+    let _ = app.run_on_main_thread(|| {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, AnyObject, Bool};
+
+        unsafe {
+            let Some(cls) = AnyClass::get("NSApplication") else {
+                return;
+            };
+            let ns_app: *mut AnyObject = msg_send![cls, sharedApplication];
+            if !ns_app.is_null() {
+                let _: () = msg_send![ns_app, activateIgnoringOtherApps: Bool::YES];
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn activate_app<R: Runtime>(_app: &AppHandle<R>) {}
+
+#[cfg(target_os = "macos")]
+fn wait_for_app_activation<R: Runtime>(app: &AppHandle<R>) {
+    let (tx, rx) = mpsc::channel();
+    let _ = app.run_on_main_thread(move || {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, AnyObject, Bool};
+
+        unsafe {
+            let Some(cls) = AnyClass::get("NSApplication") else {
+                let _ = tx.send(());
+                return;
+            };
+            let ns_app: *mut AnyObject = msg_send![cls, sharedApplication];
+            if !ns_app.is_null() {
+                let _: () = msg_send![ns_app, activateIgnoringOtherApps: Bool::YES];
+            }
+        }
+        let _ = tx.send(());
+    });
+    let _ = rx.recv_timeout(Duration::from_millis(800));
+    std::thread::sleep(Duration::from_millis(150));
+}
+
+#[cfg(not(target_os = "macos"))]
+fn wait_for_app_activation<R: Runtime>(_app: &AppHandle<R>) {}
 
 /// 把 capsule 窗口移到屏幕底部居中，与 Swift `CapsuleWindowController.repositionToBottomCenter` 同效。
 /// 留 80pt 给 macOS Dock；Windows 任务栏一般在底部 48pt 以内，整体也合适。

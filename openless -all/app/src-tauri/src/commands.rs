@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::coordinator::Coordinator;
 use crate::permissions::{self, PermissionStatus};
@@ -21,10 +21,7 @@ pub fn get_settings(coord: CoordinatorState<'_>) -> UserPreferences {
 }
 
 #[tauri::command]
-pub fn set_settings(
-    coord: CoordinatorState<'_>,
-    prefs: UserPreferences,
-) -> Result<(), String> {
+pub fn set_settings(coord: CoordinatorState<'_>, prefs: UserPreferences) -> Result<(), String> {
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
     coord.update_hotkey_binding();
     Ok(())
@@ -197,14 +194,23 @@ pub fn check_microphone_permission() -> PermissionStatus {
     permissions::check_microphone()
 }
 
+#[tauri::command]
+pub fn request_microphone_permission(app: AppHandle) -> PermissionStatus {
+    crate::request_microphone_from_foreground(&app)
+}
+
 /// 跳到 macOS 系统设置的指定隐私面板。pane: "accessibility" | "microphone".
 #[tauri::command]
 pub fn open_system_settings(pane: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let url = match pane.as_str() {
-            "accessibility" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-            "microphone" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+            "accessibility" => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            }
+            "microphone" => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+            }
             _ => "x-apple.systempreferences:com.apple.preference.security?Privacy",
         };
         std::process::Command::new("open")
@@ -221,64 +227,19 @@ pub fn open_system_settings(pane: String) -> Result<(), String> {
 }
 
 /// 触发 macOS 系统弹"是否允许 OpenLess 访问麦克风"对话框。
-/// 关键：**必须 `.play()` 才会触发 TCC 检查并弹框** —— `build_input_stream` 仅构造对象，
-/// 不会让操作系统去问用户。**这是上次 trigger 看似不响应的真正原因。**
-/// 流启动 ~400ms 后关闭 — 足够 macOS 处理弹窗,又不会真采到声音。
-///
-/// 注意：仅在权限 == NotDetermined 时调用有意义；Denied 状态下系统**不会再弹**任何框,
-/// 必须用户手动到系统设置 → 隐私与安全性 → 麦克风 把 OpenLess 勾上。
+/// 与 Swift `MicrophonePermission.request()` 同语义：只信系统权限回调，
+/// 不用 cpal stream 成功与否伪造授权状态。
 #[tauri::command]
-pub fn trigger_microphone_prompt() -> Result<(), String> {
-    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-    let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| "no input device".to_string())?;
-    let config = device
-        .default_input_config()
-        .map_err(|e| e.to_string())?;
-    log::info!(
-        "[mic] trigger_microphone_prompt: opening device {} ({} Hz, {:?})",
-        device.name().unwrap_or_else(|_| "<unnamed>".into()),
-        config.sample_rate().0,
-        config.sample_format(),
-    );
-    let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => device.build_input_stream(
-            &config.into(),
-            |_data: &[f32], _: &_| {},
-            |err| log::warn!("[mic] trigger stream err: {err}"),
-            None,
-        ),
-        cpal::SampleFormat::I16 => device.build_input_stream(
-            &config.into(),
-            |_data: &[i16], _: &_| {},
-            |err| log::warn!("[mic] trigger stream err: {err}"),
-            None,
-        ),
-        cpal::SampleFormat::U16 => device.build_input_stream(
-            &config.into(),
-            |_data: &[u16], _: &_| {},
-            |err| log::warn!("[mic] trigger stream err: {err}"),
-            None,
-        ),
-        other => return Err(format!("unsupported sample format {other:?}")),
+pub fn trigger_microphone_prompt(app: AppHandle) -> Result<(), String> {
+    let status = crate::request_microphone_from_foreground(&app);
+    if matches!(
+        status,
+        PermissionStatus::Granted | PermissionStatus::NotApplicable
+    ) {
+        Ok(())
+    } else {
+        Err(format!("microphone permission is {status:?}"))
     }
-    .map_err(|e| {
-        log::warn!("[mic] build_input_stream failed: {e}");
-        e.to_string()
-    })?;
-
-    // ★ 关键：play() 才让 macOS 实际去 TCC 查权限 → 触发系统弹框。
-    if let Err(e) = stream.play() {
-        log::warn!("[mic] stream.play() failed: {e}");
-        return Err(e.to_string());
-    }
-    // 给 OS 一点时间把弹框显示出来；用户在他们的世界里慢慢看 / 点。
-    std::thread::sleep(std::time::Duration::from_millis(400));
-    drop(stream);
-    log::info!("[mic] trigger_microphone_prompt: stream play() + drop 完成");
-    Ok(())
 }
 
 // ─────────────────────────── unused but exported (silences dead_code) ───────────────────────────

@@ -14,9 +14,7 @@ use parking_lot::Mutex;
 use tauri::{async_runtime, AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
-use crate::asr::{
-    DictionaryHotword, RawTranscript, VolcengineCredentials, VolcengineStreamingASR,
-};
+use crate::asr::{DictionaryHotword, RawTranscript, VolcengineCredentials, VolcengineStreamingASR};
 use crate::hotkey::{HotkeyEvent, HotkeyMonitor};
 use crate::insertion::TextInserter;
 use crate::persistence::{
@@ -105,9 +103,15 @@ impl Coordinator {
             .ok();
     }
 
-    pub fn history(&self) -> &HistoryStore { &self.inner.history }
-    pub fn prefs(&self) -> &PreferencesStore { &self.inner.prefs }
-    pub fn vocab(&self) -> &DictionaryStore { &self.inner.vocab }
+    pub fn history(&self) -> &HistoryStore {
+        &self.inner.history
+    }
+    pub fn prefs(&self) -> &PreferencesStore {
+        &self.inner.prefs
+    }
+    pub fn vocab(&self) -> &DictionaryStore {
+        &self.inner.vocab
+    }
 
     pub fn update_hotkey_binding(&self) {
         if let Some(monitor) = self.inner.hotkey.lock().as_ref() {
@@ -129,7 +133,9 @@ impl Coordinator {
 
     pub async fn repolish(&self, raw_text: String, mode: PolishMode) -> Result<String, String> {
         let hotwords = enabled_phrases(&self.inner);
-        polish_text(&raw_text, mode, &hotwords).await.map_err(|e| e.to_string())
+        polish_text(&raw_text, mode, &hotwords)
+            .await
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -146,7 +152,10 @@ fn hotkey_supervisor_loop(inner: Arc<Inner>) {
         match HotkeyMonitor::start(binding, tx) {
             Ok(monitor) => {
                 *inner.hotkey.lock() = Some(monitor);
-                log::info!("[coord] hotkey listener installed (after {} attempt(s))", attempts + 1);
+                log::info!(
+                    "[coord] hotkey listener installed (after {} attempt(s))",
+                    attempts + 1
+                );
                 let inner_clone = Arc::clone(&inner);
                 std::thread::Builder::new()
                     .name("openless-hotkey-bridge".into())
@@ -223,6 +232,20 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         state.started_at = Instant::now();
     }
 
+    if let Err(message) = ensure_microphone_permission(inner) {
+        log::warn!("[coord] microphone permission gate failed: {message}");
+        emit_capsule(
+            inner,
+            CapsuleState::Error,
+            0.0,
+            0,
+            Some(message.clone()),
+            None,
+        );
+        inner.state.lock().phase = SessionPhase::Idle;
+        return Err(message);
+    }
+
     emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
 
     let creds = read_volc_credentials();
@@ -251,7 +274,12 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
     let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
         let phase = inner_for_level.state.lock().phase;
         if phase == SessionPhase::Listening || phase == SessionPhase::Starting {
-            let elapsed = inner_for_level.state.lock().started_at.elapsed().as_millis() as u64;
+            let elapsed = inner_for_level
+                .state
+                .lock()
+                .started_at
+                .elapsed()
+                .as_millis() as u64;
             emit_capsule(
                 &inner_for_level,
                 CapsuleState::Recording,
@@ -402,7 +430,37 @@ fn cancel_session(inner: &Arc<Inner>) {
 
 // ─────────────────────────── helpers ───────────────────────────
 
-async fn polish_or_passthrough(raw: &RawTranscript, mode: PolishMode, hotwords: &[String]) -> String {
+fn ensure_microphone_permission(inner: &Arc<Inner>) -> Result<(), String> {
+    use crate::permissions::{self, PermissionStatus};
+
+    let status = permissions::check_microphone();
+    if matches!(
+        status,
+        PermissionStatus::Granted | PermissionStatus::NotApplicable
+    ) {
+        return Ok(());
+    }
+
+    let requested = if let Some(app) = inner.app.lock().clone() {
+        crate::request_microphone_from_foreground(&app)
+    } else {
+        permissions::request_microphone()
+    };
+    if matches!(
+        requested,
+        PermissionStatus::Granted | PermissionStatus::NotApplicable
+    ) {
+        Ok(())
+    } else {
+        Err(format!("需要麦克风权限，当前状态: {requested:?}"))
+    }
+}
+
+async fn polish_or_passthrough(
+    raw: &RawTranscript,
+    mode: PolishMode,
+    hotwords: &[String],
+) -> String {
     if mode == PolishMode::Raw {
         return raw.text.clone();
     }

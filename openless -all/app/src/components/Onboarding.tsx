@@ -9,7 +9,7 @@ import {
   checkMicrophonePermission,
   openSystemSettings,
   requestAccessibilityPermission,
-  triggerMicrophonePrompt,
+  requestMicrophonePermission,
 } from '../lib/ipc';
 import type { PermissionStatus } from '../lib/types';
 
@@ -62,7 +62,11 @@ export function Onboarding({ onComplete }: OnboardingProps) {
       if (microphone === 'denied') {
         await openSystemSettings('microphone');
       } else {
-        await triggerMicrophonePrompt();
+        const status = await requestMicrophonePermission();
+        setMicrophone(status);
+        if (status === 'denied' || status === 'restricted') {
+          await openSystemSettings('microphone');
+        }
       }
     } finally {
       setBusy(false);
