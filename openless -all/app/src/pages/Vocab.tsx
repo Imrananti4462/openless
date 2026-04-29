@@ -11,10 +11,19 @@ export function Vocab() {
   const [loading, setLoading] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const [error, setError] = useState<string | null>(null);
+
   const refresh = async () => {
-    const data = await listVocab();
-    setEntries(data);
-    setLoading(false);
+    try {
+      setError(null);
+      const data = await listVocab();
+      setEntries(data);
+    } catch (e) {
+      // 之前没 try/catch,后端 decode 失败时 spinner 永久卡死。
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -82,12 +91,17 @@ export function Vocab() {
         </div>
         <div style={{ padding: 18, display: 'flex', flexWrap: 'wrap', gap: 8, minHeight: 80 }}>
           {loading && <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>加载中…</div>}
-          {!loading && entries.length === 0 && (
+          {!loading && error && (
+            <div style={{ fontSize: 12, color: 'var(--ol-err)', lineHeight: 1.6 }}>
+              加载失败:{error}
+            </div>
+          )}
+          {!loading && !error && entries.length === 0 && (
             <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>
               还没有词条。在上面输入一个生词或专业术语，让模型在听写时优先匹配。
             </div>
           )}
-          {entries.map(e => (
+          {!error && entries.map(e => (
             <VocabChip key={e.id} entry={e} onRemove={() => onRemove(e.id)} onToggle={() => onToggle(e)} />
           ))}
         </div>

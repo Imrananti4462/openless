@@ -57,11 +57,21 @@ pub struct DictationSession {
 pub struct DictionaryEntry {
     pub id: String,
     pub phrase: String,
+    /// Swift `DictionaryEntry.swift` 用的是 `notes`(复数)；Rust 用 `note`(单数)。
+    /// alias 接受老文件 + 自身字段名。
+    #[serde(default, alias = "notes")]
     pub note: Option<String>,
+    #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Swift 用 `hitCount`,Rust 用 `hits`。alias + default 让老文件不缺字段。
+    #[serde(default, alias = "hitCount")]
     pub hits: u64,
+    /// Swift 写 ISO8601;Rust 也用 String,直接通过。
+    #[serde(default)]
     pub created_at: String,
 }
+
+fn default_true() -> bool { true }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
