@@ -71,7 +71,9 @@ pub struct DictionaryEntry {
     pub created_at: String,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -160,7 +162,7 @@ pub enum CapsuleState {
 #[serde(rename_all = "camelCase")]
 pub struct CapsulePayload {
     pub state: CapsuleState,
-    pub level: f32,            // 0..1 RMS
+    pub level: f32, // 0..1 RMS
     pub elapsed_ms: u64,
     pub message: Option<String>,
     pub inserted_chars: Option<u32>,

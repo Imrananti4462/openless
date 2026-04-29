@@ -68,7 +68,9 @@ fn simulate_paste() -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
     let modifier = Key::Control;
-    enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
+    enigo
+        .key(modifier, Direction::Press)
+        .map_err(|e| e.to_string())?;
     let press_v = enigo.key(Key::Unicode('v'), Direction::Click);
     let release_modifier = enigo.key(modifier, Direction::Release);
     if let Err(e) = release_modifier {

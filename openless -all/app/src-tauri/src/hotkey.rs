@@ -39,10 +39,7 @@ impl HotkeyMonitor {
     /// the OS-level hook installed (CGEventTap on macOS / rdev::listen otherwise).
     /// Returns Err if installation failed (typically Accessibility not granted on macOS),
     /// so the caller can schedule a retry instead of silently dropping events.
-    pub fn start(
-        binding: HotkeyBinding,
-        tx: Sender<HotkeyEvent>,
-    ) -> anyhow::Result<Self> {
+    pub fn start(binding: HotkeyBinding, tx: Sender<HotkeyEvent>) -> anyhow::Result<Self> {
         let shared = Arc::new(Shared {
             binding: RwLock::new(binding),
             trigger_held: AtomicBool::new(false),
@@ -293,9 +290,9 @@ mod platform {
         match trigger {
             HotkeyTrigger::LeftControl | HotkeyTrigger::RightControl => FLAG_MASK_CONTROL,
             HotkeyTrigger::RightCommand => FLAG_MASK_COMMAND,
-            HotkeyTrigger::LeftOption
-            | HotkeyTrigger::RightOption
-            | HotkeyTrigger::RightAlt => FLAG_MASK_ALTERNATE,
+            HotkeyTrigger::LeftOption | HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt => {
+                FLAG_MASK_ALTERNATE
+            }
             HotkeyTrigger::Fn => FLAG_MASK_SECONDARY_FN,
         }
     }

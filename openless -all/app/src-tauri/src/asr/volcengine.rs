@@ -449,10 +449,8 @@ impl AudioConsumer for VolcengineStreamingASR {
                 if st.pending_audio.len() < TARGET_AUDIO_CHUNK_BYTES {
                     None
                 } else {
-                    let chunk: Vec<u8> = st
-                        .pending_audio
-                        .drain(..TARGET_AUDIO_CHUNK_BYTES)
-                        .collect();
+                    let chunk: Vec<u8> =
+                        st.pending_audio.drain(..TARGET_AUDIO_CHUNK_BYTES).collect();
                     let seq = st.next_sequence;
                     st.next_sequence += 1;
                     st.bytes_sent += chunk.len();
