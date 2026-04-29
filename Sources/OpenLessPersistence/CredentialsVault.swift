@@ -499,6 +499,46 @@ extension CredentialsVault {
     }
 }
 
+// MARK: - 多 ASR provider 支持（C-2 切换器）
+
+extension CredentialsVault {
+    /// 当前选中的 ASR provider id；getter 同时承担"loadIfNeeded"。
+    /// 切换 active ASR 后会通过写盘把新值持久化；调用方应 post `.openLessCredentialsChanged`
+    /// 让 DictationCoordinator 等订阅方刷新缓存（这里不直接 post，避免循环依赖）。
+    public var activeASRProviderId: String {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            loadIfNeededLocked()
+            return schema.active.asr
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            loadIfNeededLocked()
+            guard schema.active.asr != newValue else { return }
+            schema.active.asr = newValue
+            try? writeLocked()
+        }
+    }
+
+    /// 列出所有"可选"的 ASR provider id：
+    /// - schema 里已有条目的 id（用户填过火山字段就会落到 providers.asr 里）
+    /// - registry 预设的 id（保证 Apple Speech 这种"无字段"provider 也能出现在 picker 里）
+    /// - 当前 active id（即便条目不存在也要列出，避免"切换-删除"流程把用户卡死）
+    public var configuredASRProviderIds: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        loadIfNeededLocked()
+        var ids = Set(schema.providers.asr.keys)
+        ids.insert(schema.active.asr)
+        for preset in ASRProviderRegistry.presets {
+            ids.insert(preset.providerId)
+        }
+        return ids.sorted()
+    }
+}
+
 // MARK: - 时间戳工具
 
 /// 紧凑 ISO8601 时间戳，例如 `20260429T103045`。固定 UTC，避免 DST。

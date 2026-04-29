@@ -580,14 +580,30 @@ final class DictationCoordinator {
 
     /// 构造当前会话使用的 `ASRProvider`。
     ///
-    /// C-1 阶段硬编码到 `VolcengineASRProvider`；C-3（Settings UI）会改成从
-    /// `vault.activeASRProviderId` 路由。返回 nil 时 coordinator 走 mock 流程
-    /// （沿用旧版「凭据缺失 → 提示性占位」的契约，不向用户报硬错误）。
+    /// 路由依据 `vault.activeASRProviderId`：
+    ///   - "volcengine"：要凭据；缺凭据时返回 nil → coordinator 走 mock 流程。
+    ///   - "apple-speech"：无凭据；直接构造 `AppleSpeechASRProvider`，权限弹窗在
+    ///     首次 openStreamingSession 时由系统触发。
+    ///   - 其他 id：未知 / 未来 provider，先返回 nil 走 mock，避免把用户卡死。
+    ///
+    /// 返回 nil 时 coordinator 走 mock 流程（沿用旧版「凭据缺失 → 提示性占位」的契约，
+    /// 不向用户报硬错误）。
     private func makeASRProvider() -> ASRProvider? {
-        guard let creds = loadVolcengineCredentials() else { return nil }
-        return VolcengineASRProvider(
-            credentials: creds,
-            logger: { msg in Log.write(msg) }
-        )
+        let activeId = CredentialsVault.shared.activeASRProviderId
+        switch activeId {
+        case "volcengine":
+            guard let creds = loadVolcengineCredentials() else { return nil }
+            return VolcengineASRProvider(
+                credentials: creds,
+                logger: { msg in Log.write(msg) }
+            )
+        case "apple-speech":
+            return AppleSpeechASRProvider(
+                logger: { msg in Log.write(msg) }
+            )
+        default:
+            Log.write("[asr] 未知 active provider \(activeId)，走 mock 流程")
+            return nil
+        }
     }
 }
