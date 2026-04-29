@@ -72,6 +72,8 @@ cat > "${APP_DIR}/Contents/Info.plist" <<EOF
     <string>OpenLess 需要麦克风权限以录制您的语音并转写为文字。</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>OpenLess 需要权限以将转写后的文字插入到您当前光标所在的输入框。</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>OpenLess 在你切换到本地 ASR 时使用 macOS 内置语音识别完成离线转写，音频不离开本机。</string>
     <key>SUFeedURL</key>
     <string>${SPARKLE_FEED_URL}</string>
     <key>SUPublicEDKey</key>
