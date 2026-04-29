@@ -8,6 +8,7 @@ public enum PolishError: Error, Sendable {
     case modelReturnedEmpty
 }
 
+@available(*, deprecated, message: "Use OpenAICompatibleLLMProvider with Ark config; this class will be removed after the provider migration ships.")
 public final class DoubaoPolishClient: @unchecked Sendable {
     private let credentials: ArkCredentials
     private let logger: (@Sendable (String) -> Void)?
