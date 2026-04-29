@@ -5,8 +5,7 @@
 //!
 //! - macOS Accessibility：`AXIsProcessTrusted` 检查；
 //!   `AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: true})` 弹系统授权框。
-//! - macOS Microphone：`AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio`。
-//!   首次开 cpal 输入流时（Info.plist 已声明 NSMicrophoneUsageDescription）macOS 自动弹框。
+//! - macOS Microphone：`AVAudioApplication.shared.recordPermission` + requestRecordPermission。
 //! - Windows：rdev / cpal 不需要 Accessibility 等价权限；麦克风首次使用时 Win10+ 弹一次系统提示。
 
 use serde::Serialize;
@@ -28,6 +27,8 @@ pub enum PermissionStatus {
 mod platform {
     use super::PermissionStatus;
     use std::ffi::c_void;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
@@ -99,13 +100,19 @@ mod platform {
     }
 
     pub fn check_microphone() -> PermissionStatus {
-        // 优先 AVAudioApplication.shared.recordPermission（macOS 14+，与 Swift
-        // MicrophonePermission 同源；和 cpal/AVAudioEngine 共享权限状态）。
-        // macOS 13 及更老用 AVCaptureDevice 兜底。
+        // 与 Swift 旧版 `MicrophonePermission.isGranted()` 保持同源。
         if let Some(status) = check_microphone_via_avaudio_application() {
             return status;
         }
         check_microphone_via_avcapture_device()
+    }
+
+    pub fn request_microphone() -> PermissionStatus {
+        // 与 Swift 旧版 `MicrophonePermission.request()` 保持同源，8 秒兜底。
+        if let Some(status) = request_microphone_via_avaudio_application() {
+            return status;
+        }
+        request_microphone_via_avcapture_device()
     }
 
     fn check_microphone_via_avaudio_application() -> Option<PermissionStatus> {
@@ -132,7 +139,44 @@ mod platform {
         };
         log::info!(
             "[mic] AVAudioApplication.recordPermission raw=0x{:x} ({}) → {:?}",
-            perm, perm, mapped
+            perm,
+            perm,
+            mapped
+        );
+        Some(mapped)
+    }
+
+    fn request_microphone_via_avaudio_application() -> Option<PermissionStatus> {
+        use block2::RcBlock;
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, Bool};
+
+        let cls = AnyClass::get("AVAudioApplication")?;
+        let (tx, rx) = mpsc::channel();
+        let block = RcBlock::new(move |granted: Bool| {
+            let _ = tx.send(granted.as_bool());
+        });
+
+        log::info!("[mic] requesting via AVAudioApplication.requestRecordPermission");
+        unsafe {
+            let _: () = msg_send![
+                cls,
+                requestRecordPermissionWithCompletionHandler: &*block
+            ];
+        }
+
+        let mapped = match rx.recv_timeout(Duration::from_secs(8)) {
+            Ok(true) => PermissionStatus::Granted,
+            Ok(false) => PermissionStatus::Denied,
+            Err(err) => {
+                log::warn!("[mic] AVAudioApplication request timeout/error: {err}");
+                check_microphone_via_avaudio_application()
+                    .unwrap_or(PermissionStatus::NotDetermined)
+            }
+        };
+        log::info!(
+            "[mic] AVAudioApplication.requestRecordPermission → {:?}",
+            mapped
         );
         Some(mapped)
     }
@@ -146,9 +190,8 @@ mod platform {
             Some(c) => c,
             None => return PermissionStatus::NotDetermined,
         };
-        let status: i64 = unsafe {
-            msg_send![cls, authorizationStatusForMediaType: AVMediaTypeAudio]
-        };
+        let status: i64 =
+            unsafe { msg_send![cls, authorizationStatusForMediaType: AVMediaTypeAudio] };
         let mapped = match status {
             3 => PermissionStatus::Granted,
             2 => PermissionStatus::Denied,
@@ -156,7 +199,46 @@ mod platform {
             0 => PermissionStatus::NotDetermined,
             _ => PermissionStatus::NotDetermined,
         };
-        log::info!("[mic] AVCaptureDevice.authStatus raw={} → {:?}", status, mapped);
+        log::info!(
+            "[mic] AVCaptureDevice.authStatus raw={} → {:?}",
+            status,
+            mapped
+        );
+        mapped
+    }
+
+    fn request_microphone_via_avcapture_device() -> PermissionStatus {
+        use block2::RcBlock;
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, Bool};
+
+        let cls = match AnyClass::get("AVCaptureDevice") {
+            Some(c) => c,
+            None => return PermissionStatus::NotDetermined,
+        };
+        let (tx, rx) = mpsc::channel();
+        let block = RcBlock::new(move |granted: Bool| {
+            let _ = tx.send(granted.as_bool());
+        });
+
+        log::info!("[mic] requesting via AVCaptureDevice.requestAccessForMediaType");
+        unsafe {
+            let _: () = msg_send![
+                cls,
+                requestAccessForMediaType: AVMediaTypeAudio
+                completionHandler: &*block
+            ];
+        }
+
+        let mapped = match rx.recv_timeout(Duration::from_secs(8)) {
+            Ok(true) => PermissionStatus::Granted,
+            Ok(false) => PermissionStatus::Denied,
+            Err(err) => {
+                log::warn!("[mic] AVCaptureDevice request timeout/error: {err}");
+                check_microphone_via_avcapture_device()
+            }
+        };
+        log::info!("[mic] AVCaptureDevice.requestAccess → {:?}", mapped);
         mapped
     }
 }
@@ -182,9 +264,15 @@ mod platform {
     pub fn check_microphone() -> PermissionStatus {
         PermissionStatus::Granted
     }
+
+    pub fn request_microphone() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
 }
 
-pub use platform::{check_accessibility, check_microphone, request_accessibility};
+pub use platform::{
+    check_accessibility, check_microphone, request_accessibility, request_microphone,
+};
 
 /// 兼容老调用：startup 时主动弹 Accessibility 框。
 pub fn request_accessibility_with_prompt(_prompt: bool) -> bool {

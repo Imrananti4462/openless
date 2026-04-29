@@ -140,6 +140,7 @@ pub fn run() {
             commands::check_accessibility_permission,
             commands::request_accessibility_permission,
             commands::check_microphone_permission,
+            commands::request_microphone_permission,
             commands::open_system_settings,
             commands::trigger_microphone_prompt,
             commands::read_credential,

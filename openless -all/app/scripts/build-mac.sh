@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# 一键构建 macOS 正式版 .app（ad-hoc 签名）。
+# 一键构建 macOS 正式版 .app / .dmg。
 #
-# Tauri 的 bundle 输出不支持自定义 Info.plist 的 LSUIElement / NSXxxUsageDescription，
-# 这里在 `tauri build` 之后用 PlistBuddy 注入，再重新 ad-hoc 签名。
+# macOS 的 LSUIElement / NSXxxUsageDescription 放在 src-tauri/Info.plist，
+# 由 Tauri 在生成 .app 和 .dmg 前合入，避免上传的 DMG 仍是旧 Info.plist。
 #
 # 用法：在 app/ 目录下执行
-#     ./scripts/build-mac.sh           # 构建 + 注入 + 签名 + 装到 /Applications
+#     ./scripts/build-mac.sh           # 构建 + 签名 + 装到 /Applications
 #     INSTALL=0 ./scripts/build-mac.sh # 只构建，不装
 
 set -euo pipefail
@@ -14,27 +14,28 @@ cd "$(dirname "$0")/.."
 
 APP="src-tauri/target/release/bundle/macos/OpenLess.app"
 INFO="$APP/Contents/Info.plist"
-PB=/usr/libexec/PlistBuddy
 INSTALL="${INSTALL:-1}"
+
+if [ -z "${APPLE_CERTIFICATE:-}" ] && [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
+  export APPLE_SIGNING_IDENTITY="-"
+  echo "▶ 未检测到 Apple 签名证书，使用 ad-hoc 签名（下载分发仍会触发 Gatekeeper）"
+else
+  echo "▶ 检测到 Apple 签名环境，交给 Tauri 做 Developer ID 签名 / 公证"
+fi
 
 echo "▶ tauri build"
 npm run tauri build
 
-echo "▶ 注入 Info.plist keys"
-inject() {
-  local key="$1" type="$2" value="$3"
-  $PB -c "Delete :$key" "$INFO" 2>/dev/null || true
-  $PB -c "Add :$key $type $value" "$INFO"
-}
-# 菜单栏 app（不在 Dock 显示，与 Swift LSUIElement = true 一致）
-inject LSUIElement bool true
-inject NSMicrophoneUsageDescription string "OpenLess需要麦克风权限来听写你的语音。"
-inject NSAccessibilityUsageDescription string "OpenLess需要辅助功能权限来监听全局快捷键并把识别结果粘贴到当前光标位置。"
-inject NSAppleEventsUsageDescription string "OpenLess需要发送按键事件，把识别结果粘贴到当前光标位置。"
-
-echo "▶ ad-hoc 签名（修改 Info.plist 后必须重新签名，否则启动崩 codesign 校验）"
-codesign --force --deep --sign - "$APP"
+echo "▶ 校验 Info.plist / 签名"
+/usr/libexec/PlistBuddy -c "Print :LSUIElement" "$INFO" >/dev/null
+/usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$INFO" >/dev/null
 codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | tail -2
+
+echo "▶ 清理发布产物扩展属性"
+# 这只能保证 CI/本机构建产物本身干净；浏览器下载仍可能重新加 quarantine。
+# 用户免手工 xattr 的根本方案是 Developer ID 签名 + Apple notarization。
+xattr -cr "$APP" 2>/dev/null || true
+find src-tauri/target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -exec xattr -c {} \; 2>/dev/null || true
 
 if [ "$INSTALL" = "1" ]; then
   echo "▶ 装到 /Applications"

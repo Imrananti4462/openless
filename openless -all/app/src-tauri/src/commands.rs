@@ -197,6 +197,11 @@ pub fn check_microphone_permission() -> PermissionStatus {
     permissions::check_microphone()
 }
 
+#[tauri::command]
+pub fn request_microphone_permission() -> PermissionStatus {
+    permissions::request_microphone()
+}
+
 /// 跳到 macOS 系统设置的指定隐私面板。pane: "accessibility" | "microphone".
 #[tauri::command]
 pub fn open_system_settings(pane: String) -> Result<(), String> {
@@ -229,6 +234,11 @@ pub fn open_system_settings(pane: String) -> Result<(), String> {
 /// 必须用户手动到系统设置 → 隐私与安全性 → 麦克风 把 OpenLess 勾上。
 #[tauri::command]
 pub fn trigger_microphone_prompt() -> Result<(), String> {
+    let status = permissions::request_microphone();
+    if matches!(status, PermissionStatus::Granted) {
+        return Ok(());
+    }
+
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     let host = cpal::default_host();
     let device = host
