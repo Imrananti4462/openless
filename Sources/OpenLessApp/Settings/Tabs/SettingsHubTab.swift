@@ -5,9 +5,9 @@ import OpenLessHotkey
 import OpenLessPersistence
 import OpenLessRecorder
 import OpenLessASR
-import OpenLessPolish
 
-/// 所有可调项汇总：录音 + 凭据（Volc ASR + Ark 润色）+ 授权 + 隐私 + 关于。
+/// 所有可调项汇总：录音 + ASR 凭据（Volc）+ 授权 + 隐私 + 关于。
+/// LLM provider 配置已经搬到独立的「LLM Provider」Tab；这里只保留 ASR / 系统级开关。
 struct SettingsHubTab: View {
     @State private var trigger: HotkeyBinding.Trigger = UserPreferences.shared.hotkeyTrigger
     @State private var hotkeyMode: HotkeyMode = UserPreferences.shared.hotkeyMode
@@ -17,10 +17,9 @@ struct SettingsHubTab: View {
     @State private var volcAppKey = ""
     @State private var volcAccessKey = ""
     @State private var volcResourceId = VolcengineCredentials.defaultResourceId
-    @State private var arkApiKey = ""
-    @State private var arkModelId = ArkCredentials.defaultModelId
-    @State private var arkEndpoint = ArkCredentials.defaultEndpoint.absoluteString
     @State private var saved = false
+    @State private var hasLLMProvider = false
+    @State private var llmProviderDisplayName = ""
 
     var body: some View {
         SettingsPage(
@@ -78,22 +77,28 @@ struct SettingsHubTab: View {
                 }
             }
 
-            GlassSection(title: "Ark / DeepSeek V3.2 润色", symbol: "wand.and.stars") {
-                SettingsRow(title: "API Key") {
-                    PasteableCredentialField(placeholder: "Bearer Token", secure: true, text: $arkApiKey)
+            GlassSection(title: "LLM 润色 Provider", symbol: "wand.and.stars") {
+                SettingsRow(title: "当前 Provider") {
+                    HStack(spacing: 10) {
+                        Label(
+                            hasLLMProvider ? llmProviderDisplayName : "未配置",
+                            systemImage: hasLLMProvider ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                        )
+                        .foregroundStyle(hasLLMProvider ? .green : .orange)
+                        Spacer()
+                    }
                 }
                 DividerLine()
-                SettingsRow(title: "Model ID") {
-                    PasteableCredentialField(placeholder: "Model ID", secure: false, text: $arkModelId)
-                }
-                DividerLine()
-                SettingsRow(title: "Endpoint") {
-                    PasteableCredentialField(placeholder: "Endpoint", secure: false, text: $arkEndpoint)
-                }
+                Text(hasLLMProvider
+                     ? "去「LLM Provider」Tab 切换 / 编辑详细字段。"
+                     : "前往「LLM Provider」Tab 选择豆包 / OpenAI / DeepSeek / 自定义 OpenAI 兼容 provider。未配置时识别后会直接插入原文。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
             }
 
             PrimaryActionRow {
-                Button("保存凭据") { saveCredentials() }
+                Button("保存 ASR 凭据") { saveCredentials() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
                 if saved {
@@ -152,9 +157,16 @@ struct SettingsHubTab: View {
         volcAppKey = v.get(CredentialAccount.volcengineAppKey) ?? ""
         volcAccessKey = v.get(CredentialAccount.volcengineAccessKey) ?? ""
         volcResourceId = v.get(CredentialAccount.volcengineResourceId) ?? VolcengineCredentials.defaultResourceId
-        arkApiKey = v.get(CredentialAccount.arkApiKey) ?? ""
-        arkModelId = v.get(CredentialAccount.arkModelId) ?? ArkCredentials.defaultModelId
-        arkEndpoint = v.get(CredentialAccount.arkEndpoint) ?? ArkCredentials.defaultEndpoint.absoluteString
+
+        // 当前 active LLM provider 是否填了 apiKey；LLM 设置已搬到 LLMProvidersTab。
+        let activeId = v.activeLLMProviderId
+        if let cfg = v.llmProviderConfig(for: activeId), !cfg.apiKey.isEmpty {
+            hasLLMProvider = true
+            llmProviderDisplayName = cfg.displayName
+        } else {
+            hasLLMProvider = false
+            llmProviderDisplayName = LLMProviderRegistry.preset(for: activeId)?.displayName ?? activeId
+        }
     }
 
     private func saveCredentials() {
@@ -162,9 +174,6 @@ struct SettingsHubTab: View {
         try? v.set(volcAppKey.trimmingCharacters(in: .whitespacesAndNewlines), for: CredentialAccount.volcengineAppKey)
         try? v.set(volcAccessKey.trimmingCharacters(in: .whitespacesAndNewlines), for: CredentialAccount.volcengineAccessKey)
         try? v.set(volcResourceId.trimmingCharacters(in: .whitespacesAndNewlines), for: CredentialAccount.volcengineResourceId)
-        try? v.set(arkApiKey.trimmingCharacters(in: .whitespacesAndNewlines), for: CredentialAccount.arkApiKey)
-        try? v.set(arkModelId.trimmingCharacters(in: .whitespacesAndNewlines), for: CredentialAccount.arkModelId)
-        try? v.set(arkEndpoint.trimmingCharacters(in: .whitespacesAndNewlines), for: CredentialAccount.arkEndpoint)
         NotificationCenter.default.post(name: .openLessCredentialsChanged, object: nil)
         saved = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { saved = false }

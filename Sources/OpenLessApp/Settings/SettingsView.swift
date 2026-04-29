@@ -15,6 +15,7 @@ enum OpenLessMainTab: String, CaseIterable, Identifiable {
     case history
     case dictionary
     case polish
+    case llm
     case help
     case settings
 
@@ -26,6 +27,7 @@ enum OpenLessMainTab: String, CaseIterable, Identifiable {
         case .history: return "历史记录"
         case .dictionary: return "词汇表"
         case .polish: return "风格"
+        case .llm: return "LLM Provider"
         case .help: return "帮助中心"
         case .settings: return "设置"
         }
@@ -37,6 +39,7 @@ enum OpenLessMainTab: String, CaseIterable, Identifiable {
         case .history: return "clock"
         case .dictionary: return "text.book.closed"
         case .polish: return "paintpalette"
+        case .llm: return "wand.and.stars"
         case .help: return "questionmark.circle"
         case .settings: return "gearshape"
         }
@@ -68,6 +71,7 @@ struct SettingsView: View {
                 case .history: HistoryTab()
                 case .dictionary: DictionaryTab()
                 case .polish: StyleTab()
+                case .llm: LLMProvidersTab()
                 case .help: HelpTab()
                 case .settings: SettingsHubTab()
                 }
