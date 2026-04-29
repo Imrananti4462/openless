@@ -18,4 +18,8 @@ public enum CredentialsError: Error, Sendable, Equatable {
 
     /// 写入 v1 文件失败。携带目标 URL 和失败描述。
     case writeFailed(URL, String)
+
+    /// 试图删除当前 active 的 LLM provider。携带 providerId。
+    /// 调用方必须先把 active 切到别的 provider 再调 `removeLLMProvider`。
+    case cannotRemoveActiveProvider(String)
 }

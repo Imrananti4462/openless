@@ -1,4 +1,5 @@
 import Foundation
+import OpenLessCore
 
 /// 开发期凭据存储：JSON 文件，路径 `~/.openless/credentials.json`，权限 0600。
 ///
@@ -81,19 +82,20 @@ public final class CredentialsVault: @unchecked Sendable {
     }
 
     /// 一次性把所有账号读出来；调用方在内存里持有，避免每次会话都打 IO。
+    /// snapshot 跟随当前 active provider；切换 active LLM 后再次调用会反映新的 provider 字段。
     public func snapshot() -> CredentialsSnapshot {
         lock.lock()
         defer { lock.unlock() }
         loadIfNeededLocked()
-        let volc = schema.providers.asr[defaultActiveASRProviderId]
-        let ark = schema.providers.llm[defaultActiveLLMProviderId]
+        let volc = schema.providers.asr[schema.active.asr]
+        let llm = schema.providers.llm[schema.active.llm]
         return CredentialsSnapshot(
             volcengineAppKey: volc?.appKey,
             volcengineAccessKey: volc?.accessKey,
             volcengineResourceId: volc?.resourceId,
-            arkApiKey: ark?.apiKey,
-            arkModelId: ark?.model,
-            arkEndpoint: ark?.baseURL
+            arkApiKey: llm?.apiKey,
+            arkModelId: llm?.model,
+            arkEndpoint: llm?.baseURL
         )
     }
 
@@ -261,19 +263,24 @@ public final class CredentialsVault: @unchecked Sendable {
     // MARK: - 账号 key → v1 字段路由
 
     private func readAccountLocked(_ account: String) -> String? {
+        // ASR 路径锁定到 active ASR provider；LLM 路径锁定到 active LLM provider。
+        // 一旦用户在 LLM 设置页切换 active（比如从 ark 切到 deepseek），老 UI 通过
+        // `ark.*` 账号 key 看到的就是 deepseek 的字段——这是预期行为。
+        let activeASR = schema.active.asr
+        let activeLLM = schema.active.llm
         switch account {
         case CredentialAccount.volcengineAppKey:
-            return schema.providers.asr[defaultActiveASRProviderId]?.appKey
+            return schema.providers.asr[activeASR]?.appKey
         case CredentialAccount.volcengineAccessKey:
-            return schema.providers.asr[defaultActiveASRProviderId]?.accessKey
+            return schema.providers.asr[activeASR]?.accessKey
         case CredentialAccount.volcengineResourceId:
-            return schema.providers.asr[defaultActiveASRProviderId]?.resourceId
+            return schema.providers.asr[activeASR]?.resourceId
         case CredentialAccount.arkApiKey:
-            return schema.providers.llm[defaultActiveLLMProviderId]?.apiKey
+            return schema.providers.llm[activeLLM]?.apiKey
         case CredentialAccount.arkModelId:
-            return schema.providers.llm[defaultActiveLLMProviderId]?.model
+            return schema.providers.llm[activeLLM]?.model
         case CredentialAccount.arkEndpoint:
-            return schema.providers.llm[defaultActiveLLMProviderId]?.baseURL
+            return schema.providers.llm[activeLLM]?.baseURL
         default:
             return nil
         }
@@ -319,23 +326,176 @@ public final class CredentialsVault: @unchecked Sendable {
     }
 
     private func mutateVolc(_ apply: (inout CredentialsProviderASRVolcengine) -> Void) {
-        var existing = schema.providers.asr[defaultActiveASRProviderId] ?? CredentialsProviderASRVolcengine()
+        // 老路径：`volcengine.*` 账号 key 始终路由到 active ASR provider。
+        // M1 active.asr 永远是 "volcengine"，未来加供应商时这里也无需再改。
+        let key = schema.active.asr
+        var existing = schema.providers.asr[key] ?? CredentialsProviderASRVolcengine()
         apply(&existing)
         if existing.isAllEmpty {
-            schema.providers.asr.removeValue(forKey: defaultActiveASRProviderId)
+            schema.providers.asr.removeValue(forKey: key)
         } else {
-            schema.providers.asr[defaultActiveASRProviderId] = existing
+            schema.providers.asr[key] = existing
         }
     }
 
-    private func mutateArk(_ apply: (inout CredentialsProviderLLMArk) -> Void) {
-        var existing = schema.providers.llm[defaultActiveLLMProviderId] ?? CredentialsProviderLLMArk()
+    private func mutateArk(_ apply: (inout CredentialsProviderLLMEntry) -> Void) {
+        // 老路径：`ark.*` 账号 key 始终路由到 active LLM provider。
+        // 这让 SettingsHubTab 等老 UI 在新 schema 下保持原本的"豆包"语义。
+        let key = schema.active.llm
+        var existing = schema.providers.llm[key] ?? CredentialsProviderLLMEntry()
         apply(&existing)
         if existing.isAllEmpty {
-            schema.providers.llm.removeValue(forKey: defaultActiveLLMProviderId)
+            schema.providers.llm.removeValue(forKey: key)
         } else {
-            schema.providers.llm[defaultActiveLLMProviderId] = existing
+            schema.providers.llm[key] = existing
         }
+    }
+}
+
+// MARK: - 多 LLM provider 支持（B-3）
+
+extension CredentialsVault {
+    /// 当前选中的 LLM provider id；getter 同时承担"loadIfNeeded"。
+    public var activeLLMProviderId: String {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            loadIfNeededLocked()
+            return schema.active.llm
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            loadIfNeededLocked()
+            guard schema.active.llm != newValue else { return }
+            schema.active.llm = newValue
+            try? writeLocked()
+        }
+    }
+
+    /// 列出所有已配置的 LLM provider id（包含还没填 apiKey 的占位条目）。
+    /// 用于设置页的 picker；当前 active 即便条目不存在也会被列出，避免"切换-删除"流程把用户卡死。
+    public var configuredLLMProviderIds: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        loadIfNeededLocked()
+        var ids = Set(schema.providers.llm.keys)
+        ids.insert(schema.active.llm)
+        return ids.sorted()
+    }
+
+    /// 读出某个 provider 的完整 OpenAICompatibleConfig；缺 apiKey 也仍然返回（让 UI 显示空表单）。
+    /// baseURL / displayName 缺省时用 registry 兜底；都没兜底则返回 nil。
+    public func llmProviderConfig(for providerId: String) -> OpenAICompatibleConfig? {
+        lock.lock()
+        defer { lock.unlock() }
+        loadIfNeededLocked()
+        let entry = schema.providers.llm[providerId]
+        let preset = LLMProviderRegistry.preset(for: providerId)
+
+        let displayName: String
+        if let stored = entry?.displayName, !stored.isEmpty {
+            displayName = stored
+        } else if let preset {
+            displayName = preset.displayName
+        } else {
+            displayName = providerId
+        }
+
+        let baseURL: URL
+        if let stored = entry?.baseURL,
+           !stored.isEmpty,
+           let parsed = URL(string: stored.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            baseURL = parsed
+        } else if let preset {
+            baseURL = preset.defaultBaseURL
+        } else {
+            // 自定义 provider 又没填 baseURL：无法构造 config。
+            return nil
+        }
+
+        let model = entry?.model ?? preset?.defaultModel ?? ""
+        let apiKey = entry?.apiKey ?? ""
+        let temperature = entry?.temperature ?? 0.3
+        let extraHeaders = entry?.extraHeaders ?? [:]
+
+        return OpenAICompatibleConfig(
+            providerId: providerId,
+            displayName: displayName,
+            baseURL: baseURL,
+            apiKey: apiKey,
+            model: model,
+            extraHeaders: extraHeaders,
+            temperature: temperature
+        )
+    }
+
+    /// 写一份完整的 OpenAICompatibleConfig 到对应 provider id 下。
+    /// - 预设 provider：与 registry 默认值相同的 baseURL / displayName 不写盘（保持 JSON 简洁，
+    ///   未来 registry 调整时不会被旧文件锁死）。
+    /// - 自定义 provider：所有字段都写入（包括 displayName，因为没有 registry 可以兜底）。
+    public func setLLMProviderConfig(_ config: OpenAICompatibleConfig) {
+        lock.lock()
+        defer { lock.unlock() }
+        loadIfNeededLocked()
+
+        let preset = LLMProviderRegistry.preset(for: config.providerId)
+        var entry = schema.providers.llm[config.providerId] ?? CredentialsProviderLLMEntry()
+
+        // displayName：与 preset 相同就不写，UI 始终从 registry 拿。
+        if let preset, preset.displayName == config.displayName {
+            entry.displayName = nil
+        } else {
+            let trimmed = config.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            entry.displayName = trimmed.isEmpty ? nil : trimmed
+        }
+
+        // baseURL：与 preset.defaultBaseURL 相同就不写。
+        if let preset, preset.defaultBaseURL == config.baseURL {
+            entry.baseURL = nil
+        } else {
+            entry.baseURL = config.baseURL.absoluteString
+        }
+
+        // model：与 preset.defaultModel 相同 / 为空 → 视为"未覆盖"，不写盘。
+        if let preset, !preset.defaultModel.isEmpty, preset.defaultModel == config.model {
+            entry.model = nil
+        } else {
+            let trimmed = config.model.trimmingCharacters(in: .whitespacesAndNewlines)
+            entry.model = trimmed.isEmpty ? nil : trimmed
+        }
+
+        // apiKey：空字符串 → nil，避免落出 `"apiKey": ""`。
+        let trimmedKey = config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        entry.apiKey = trimmedKey.isEmpty ? nil : trimmedKey
+
+        // temperature：默认 0.3 视为未覆盖。
+        entry.temperature = config.temperature == 0.3 ? nil : config.temperature
+
+        // extraHeaders：空 dict 收敛成 nil。
+        entry.extraHeaders = config.extraHeaders.isEmpty ? nil : config.extraHeaders
+
+        if entry.isAllEmpty {
+            schema.providers.llm.removeValue(forKey: config.providerId)
+        } else {
+            schema.providers.llm[config.providerId] = entry
+        }
+        try? writeLocked()
+    }
+
+    /// 删除某个 LLM provider；不允许删 active provider。
+    /// 需要先把 `activeLLMProviderId` 切到别的 id，再删旧条目。
+    public func removeLLMProvider(_ providerId: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        loadIfNeededLocked()
+
+        if schema.active.llm == providerId {
+            throw CredentialsError.cannotRemoveActiveProvider(providerId)
+        }
+        guard schema.providers.llm[providerId] != nil else { return }
+        schema.providers.llm.removeValue(forKey: providerId)
+        try writeLocked()
     }
 }
 
