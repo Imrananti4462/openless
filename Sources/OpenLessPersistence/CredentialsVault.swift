@@ -325,11 +325,14 @@ public final class CredentialsVault: @unchecked Sendable {
         }
     }
 
-    private func mutateVolc(_ apply: (inout CredentialsProviderASRVolcengine) -> Void) {
+    private func mutateVolc(_ apply: (inout CredentialsProviderASREntry) -> Void) {
         // 老路径：`volcengine.*` 账号 key 始终路由到 active ASR provider。
-        // M1 active.asr 永远是 "volcengine"，未来加供应商时这里也无需再改。
+        // 当 active.asr 是火山时该路径仍然按预期工作；切到 apple-speech / aliyun-paraformer
+        // 等无 appKey/accessKey/resourceId 字段的 provider 后，老 API 把字段写到当前 active
+        // provider 的 entry 上是无意义的（也不会用到），但不会破坏 schema。要避免这种情况，
+        // 应在 UI 切换 active 时通过新的 setASRProviderConfig 直接寻址 "volcengine"。
         let key = schema.active.asr
-        var existing = schema.providers.asr[key] ?? CredentialsProviderASRVolcengine()
+        var existing = schema.providers.asr[key] ?? CredentialsProviderASREntry()
         apply(&existing)
         if existing.isAllEmpty {
             schema.providers.asr.removeValue(forKey: key)
@@ -536,6 +539,47 @@ extension CredentialsVault {
             ids.insert(preset.providerId)
         }
         return ids.sorted()
+    }
+
+    // MARK: - ASR provider 通用配置（C-3）
+
+    /// 读出某个 ASR provider 的完整凭据 entry。返回 nil 表示该 provider 在 schema 里没条目。
+    /// 与 `llmProviderConfig` 不同：ASR 各家协议字段差异大，这里直接返回 raw entry，
+    /// 让 provider 工厂自己挑需要的字段（如阿里只看 apiKey；自定义 Whisper 看 baseURL+apiKey+model）。
+    public func asrProviderConfig(for providerId: String) -> CredentialsProviderASREntry? {
+        lock.lock()
+        defer { lock.unlock() }
+        loadIfNeededLocked()
+        return schema.providers.asr[providerId]
+    }
+
+    /// 写一份完整的 ASR provider 配置。
+    /// - 全字段都为空 (`isAllEmpty`) 时直接删除对应条目，避免 JSON 里留下空对象。
+    public func setASRProviderConfig(_ entry: CredentialsProviderASREntry, for providerId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        loadIfNeededLocked()
+        if entry.isAllEmpty {
+            schema.providers.asr.removeValue(forKey: providerId)
+        } else {
+            schema.providers.asr[providerId] = entry
+        }
+        try? writeLocked()
+    }
+
+    /// 删除某个 ASR provider；不允许删 active provider。
+    /// 与 `removeLLMProvider` 一致——需要先把 `activeASRProviderId` 切到别的 id 再删。
+    public func removeASRProvider(_ providerId: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        loadIfNeededLocked()
+
+        if schema.active.asr == providerId {
+            throw CredentialsError.cannotRemoveActiveProvider(providerId)
+        }
+        guard schema.providers.asr[providerId] != nil else { return }
+        schema.providers.asr.removeValue(forKey: providerId)
+        try writeLocked()
     }
 }
 

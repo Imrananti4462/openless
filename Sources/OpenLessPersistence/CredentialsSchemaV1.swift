@@ -32,14 +32,16 @@ public struct CredentialsSchemaV1: Codable, Sendable, Equatable {
 
 /// `providers` 节点。M1 类型化为已知的两类（asr / llm），未来扩展时把字典加到这里。
 public struct CredentialsProviders: Codable, Sendable, Equatable {
-    /// ASR 类别：providerId → provider 配置。M1 仅有 `volcengine`。
-    public var asr: [String: CredentialsProviderASRVolcengine]
+    /// ASR 类别：providerId → provider 配置。
+    /// 通用 entry：火山（appKey/accessKey/resourceId）/ 阿里 paraformer（apiKey）/
+    /// 自定义 OpenAI Whisper（apiKey/baseURL/model）共用同一份 entry。
+    public var asr: [String: CredentialsProviderASREntry]
     /// LLM 类别：providerId → provider 配置。
     /// 任意 OpenAI 兼容供应商（ark / openai / aliyun-dashscope / deepseek / moonshot / 自定义）共用一份 entry。
     public var llm: [String: CredentialsProviderLLMEntry]
 
     public init(
-        asr: [String: CredentialsProviderASRVolcengine] = [:],
+        asr: [String: CredentialsProviderASREntry] = [:],
         llm: [String: CredentialsProviderLLMEntry] = [:]
     ) {
         self.asr = asr
@@ -47,15 +49,41 @@ public struct CredentialsProviders: Codable, Sendable, Equatable {
     }
 }
 
-/// Volcengine streaming ASR 凭据。
+/// 通用 ASR provider 凭据条目。
+///
+/// 各家 ASR provider 的字段需求差异较大（火山要 appKey/accessKey/resourceId；阿里 paraformer
+/// 只要 apiKey；自定义 OpenAI 兼容 Whisper 需要 apiKey/baseURL/model），所以这里把所有可能用到的
+/// 字段都设成可选——具体 provider 只填它需要的子集，其余字段保持 nil。
 ///
 /// 自定义编码：nil 字段直接省略（不写 `"appKey": null`），保持 JSON 干净。
-public struct CredentialsProviderASRVolcengine: Codable, Sendable, Equatable {
+/// 这是**向后兼容**的——已经迁移到 v1 的 `providers.asr.volcengine` 仍然只包含
+/// appKey/accessKey/resourceId 三个字段，新解码不会失败。
+public struct CredentialsProviderASREntry: Codable, Sendable, Equatable, Hashable {
+    /// 通用 API key（用于阿里 paraformer / 自定义 Whisper 等单 token 鉴权 provider）。
+    public var apiKey: String?
+    /// 自定义 OpenAI Whisper / 私有部署的 base URL。
+    /// 字符串而不是 URL：编辑过程中用户输入可能是非法 URL，schema 不在这里早 fail。
+    public var baseURL: String?
+    /// 模型 id（自定义 Whisper 默认 `whisper-1`；预设 provider 一般固定 model 名，可省）。
+    public var model: String?
+    /// 火山 App Key（旧字段；保持向后兼容）。
     public var appKey: String?
+    /// 火山 Access Key（旧字段；保持向后兼容）。
     public var accessKey: String?
+    /// 火山 Resource ID（旧字段；保持向后兼容）。
     public var resourceId: String?
 
-    public init(appKey: String? = nil, accessKey: String? = nil, resourceId: String? = nil) {
+    public init(
+        apiKey: String? = nil,
+        baseURL: String? = nil,
+        model: String? = nil,
+        appKey: String? = nil,
+        accessKey: String? = nil,
+        resourceId: String? = nil
+    ) {
+        self.apiKey = apiKey
+        self.baseURL = baseURL
+        self.model = model
         self.appKey = appKey
         self.accessKey = accessKey
         self.resourceId = resourceId
@@ -63,15 +91,23 @@ public struct CredentialsProviderASRVolcengine: Codable, Sendable, Equatable {
 
     /// 是否所有字段都是空 / nil。空 provider 在写盘时不应出现。
     public var isAllEmpty: Bool {
-        isNilOrEmpty(appKey) && isNilOrEmpty(accessKey) && isNilOrEmpty(resourceId)
+        isNilOrEmpty(apiKey)
+            && isNilOrEmpty(baseURL)
+            && isNilOrEmpty(model)
+            && isNilOrEmpty(appKey)
+            && isNilOrEmpty(accessKey)
+            && isNilOrEmpty(resourceId)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case appKey, accessKey, resourceId
+        case apiKey, baseURL, model, appKey, accessKey, resourceId
     }
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(apiKey, forKey: .apiKey)
+        try c.encodeIfPresent(baseURL, forKey: .baseURL)
+        try c.encodeIfPresent(model, forKey: .model)
         try c.encodeIfPresent(appKey, forKey: .appKey)
         try c.encodeIfPresent(accessKey, forKey: .accessKey)
         try c.encodeIfPresent(resourceId, forKey: .resourceId)
@@ -79,11 +115,18 @@ public struct CredentialsProviderASRVolcengine: Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        apiKey = try c.decodeIfPresent(String.self, forKey: .apiKey)
+        baseURL = try c.decodeIfPresent(String.self, forKey: .baseURL)
+        model = try c.decodeIfPresent(String.self, forKey: .model)
         appKey = try c.decodeIfPresent(String.self, forKey: .appKey)
         accessKey = try c.decodeIfPresent(String.self, forKey: .accessKey)
         resourceId = try c.decodeIfPresent(String.self, forKey: .resourceId)
     }
 }
+
+/// 兼容别名：B-2 / C-1 时期叫 `CredentialsProviderASRVolcengine`。
+/// 通用化（C-3）后所有 ASR provider 共用同一类型。保留 typealias 让外部代码继续编译。
+public typealias CredentialsProviderASRVolcengine = CredentialsProviderASREntry
 
 /// 通用 OpenAI 兼容 LLM provider 凭据条目。
 ///

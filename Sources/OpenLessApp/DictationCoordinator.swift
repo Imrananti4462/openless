@@ -584,12 +584,17 @@ final class DictationCoordinator {
     ///   - "volcengine"：要凭据；缺凭据时返回 nil → coordinator 走 mock 流程。
     ///   - "apple-speech"：无凭据；直接构造 `AppleSpeechASRProvider`，权限弹窗在
     ///     首次 openStreamingSession 时由系统触发。
+    ///   - "aliyun-paraformer"：DashScope Bearer key；找不到时回退去复用 LLM
+    ///     `aliyun-dashscope` 的 apiKey（同一把 key 两个产品都能用）。
+    ///   - "custom-openai-whisper"：仅注册 case；coordinator 当前的 streaming 流程不会消费
+    ///     这个 provider（mode=.batch），录音路径会落 mock，直到 batch dispatch 接好。
     ///   - 其他 id：未知 / 未来 provider，先返回 nil 走 mock，避免把用户卡死。
     ///
     /// 返回 nil 时 coordinator 走 mock 流程（沿用旧版「凭据缺失 → 提示性占位」的契约，
     /// 不向用户报硬错误）。
     private func makeASRProvider() -> ASRProvider? {
-        let activeId = CredentialsVault.shared.activeASRProviderId
+        let vault = CredentialsVault.shared
+        let activeId = vault.activeASRProviderId
         switch activeId {
         case "volcengine":
             guard let creds = loadVolcengineCredentials() else { return nil }
@@ -601,9 +606,57 @@ final class DictationCoordinator {
             return AppleSpeechASRProvider(
                 logger: { msg in Log.write(msg) }
             )
+        case "aliyun-paraformer":
+            // 优先用 ASR 自己存的 key；空时回退复用 LLM aliyun-dashscope（同一把 DashScope token）。
+            if let entry = vault.asrProviderConfig(for: "aliyun-paraformer"),
+               let key = entry.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !key.isEmpty {
+                return AliyunParaformerASRProvider(
+                    apiKey: key,
+                    logger: { msg in Log.write(msg) }
+                )
+            }
+            if let llmCfg = vault.llmProviderConfig(for: "aliyun-dashscope"),
+               !llmCfg.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Log.write("[asr] aliyun-paraformer 没有自己的 apiKey，复用 LLM aliyun-dashscope key")
+                return AliyunParaformerASRProvider(
+                    apiKey: llmCfg.apiKey,
+                    logger: { msg in Log.write(msg) }
+                )
+            }
+            Log.write("[asr] aliyun-paraformer 缺少 apiKey，走 mock 流程")
+            return nil
+        case "custom-openai-whisper":
+            // TODO(coordinator-batch): 当前 coordinator 只走 streaming 路径
+            //   （`provider.openStreamingSession(...)`）。Whisper 是 batch provider，
+            //   `openStreamingSession` 会抛 .unsupportedMode；需要补一条
+            //   "录完整体 → provider.transcribeBatch" 的分发链路再接进来。
+            //   在那之前用户选了这家 provider，会落 mock；UI 应给提示。
+            guard let entry = vault.asrProviderConfig(for: "custom-openai-whisper"),
+                  let key = entry.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !key.isEmpty,
+                  let urlStr = entry.baseURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  let baseURL = URL(string: urlStr) else {
+                Log.write("[asr] custom-openai-whisper 缺少 baseURL/apiKey，走 mock 流程")
+                return nil
+            }
+            let model = entry.model?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "whisper-1"
+            return CustomOpenAIWhisperASRProvider(
+                baseURL: baseURL,
+                apiKey: key,
+                model: model,
+                logger: { msg in Log.write(msg) }
+            )
         default:
             Log.write("[asr] 未知 active provider \(activeId)，走 mock 流程")
             return nil
         }
     }
+}
+
+// MARK: - 小工具
+
+private extension String {
+    /// 空字符串 → nil；保持调用点的 `??` 兜底语义统一。
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
