@@ -60,7 +60,7 @@ mod platform {
     }
 
     // AVAudioApplication 在 AVFAudio 框架（macOS 14+）。Swift 原版 MicrophonePermission.swift
-    // 走的就是这条；它和 cpal/AVAudioEngine 共享同一个权限状态。
+    // 走的就是这条；它是录音启动前判断权限的唯一真相源。
     #[link(name = "AVFAudio", kind = "framework")]
     extern "C" {}
 
@@ -100,7 +100,7 @@ mod platform {
     }
 
     pub fn check_microphone() -> PermissionStatus {
-        // 与 Swift 旧版 `MicrophonePermission.isGranted()` 保持同源。
+        // 与 Swift `MicrophonePermission.isGranted()` 保持同源。
         if let Some(status) = check_microphone_via_avaudio_application() {
             return status;
         }
@@ -108,7 +108,7 @@ mod platform {
     }
 
     pub fn request_microphone() -> PermissionStatus {
-        // 与 Swift 旧版 `MicrophonePermission.request()` 保持同源，8 秒兜底。
+        // 与 Swift `MicrophonePermission.request()` 保持同源，8 秒兜底。
         if let Some(status) = request_microphone_via_avaudio_application() {
             return status;
         }

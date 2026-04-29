@@ -223,6 +223,20 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         state.started_at = Instant::now();
     }
 
+    if let Err(message) = ensure_microphone_permission(inner) {
+        log::warn!("[coord] microphone permission gate failed: {message}");
+        emit_capsule(
+            inner,
+            CapsuleState::Error,
+            0.0,
+            0,
+            Some(message.clone()),
+            None,
+        );
+        inner.state.lock().phase = SessionPhase::Idle;
+        return Err(message);
+    }
+
     emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
 
     let creds = read_volc_credentials();
@@ -401,6 +415,29 @@ fn cancel_session(inner: &Arc<Inner>) {
 }
 
 // ─────────────────────────── helpers ───────────────────────────
+
+fn ensure_microphone_permission(inner: &Arc<Inner>) -> Result<(), String> {
+    use crate::permissions::{self, PermissionStatus};
+
+    let status = permissions::check_microphone();
+    if matches!(status, PermissionStatus::Granted | PermissionStatus::NotApplicable) {
+        return Ok(());
+    }
+
+    if let Some(app) = inner.app.lock().clone() {
+        crate::show_main_window(&app);
+    }
+
+    let requested = permissions::request_microphone();
+    if matches!(
+        requested,
+        PermissionStatus::Granted | PermissionStatus::NotApplicable
+    ) {
+        Ok(())
+    } else {
+        Err(format!("需要麦克风权限，当前状态: {requested:?}"))
+    }
+}
 
 async fn polish_or_passthrough(raw: &RawTranscript, mode: PolishMode, hotwords: &[String]) -> String {
     if mode == PolishMode::Raw {

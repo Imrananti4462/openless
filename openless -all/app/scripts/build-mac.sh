@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 一键构建 macOS 正式版 .app / .dmg。
 #
-# macOS 的 LSUIElement / NSXxxUsageDescription 放在 src-tauri/Info.plist，
+# macOS 的 NSXxxUsageDescription 放在 src-tauri/Info.plist，
 # 由 Tauri 在生成 .app 和 .dmg 前合入，避免上传的 DMG 仍是旧 Info.plist。
 #
 # 用法：在 app/ 目录下执行
@@ -27,7 +27,6 @@ echo "▶ tauri build"
 npm run tauri build
 
 echo "▶ 校验 Info.plist / 签名"
-/usr/libexec/PlistBuddy -c "Print :LSUIElement" "$INFO" >/dev/null
 /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$INFO" >/dev/null
 codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | tail -2
 
