@@ -6,9 +6,7 @@ import { detectOS } from './components/WindowChrome';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
-  debugLogUiKeyEvent,
   handleWindowHotkeyEvent,
-  isDebugUiKeyEventsEnabled,
   isTauri,
 } from './lib/ipc';
 import { HotkeySettingsProvider } from './state/HotkeySettingsContext';
@@ -61,55 +59,21 @@ export function App({ isCapsule }: AppProps) {
   }, [os]);
 
   useEffect(() => {
-    if (!isTauri) return;
-    let disposed = false;
-    let detach: (() => void) | null = null;
-
-    void isDebugUiKeyEventsEnabled().then(enabled => {
-      if (!enabled || disposed) return;
-      const onKeyboardEvent = (event: KeyboardEvent) => {
-        void debugLogUiKeyEvent({
-          eventType: event.type,
-          key: event.key,
-          code: event.code,
-          ctrl: event.ctrlKey,
-          alt: event.altKey,
-          shift: event.shiftKey,
-          meta: event.metaKey,
-          repeat: event.repeat,
-        });
-      };
-      window.addEventListener('keydown', onKeyboardEvent, true);
-      window.addEventListener('keyup', onKeyboardEvent, true);
-      detach = () => {
-        window.removeEventListener('keydown', onKeyboardEvent, true);
-        window.removeEventListener('keyup', onKeyboardEvent, true);
-      };
-    });
-
-    return () => {
-      disposed = true;
-      detach?.();
-    };
-  }, []);
-
-  useEffect(() => {
     if (!isTauri || os !== 'win') return;
-
-    const onKeyboardEvent = (event: KeyboardEvent) => {
-      void handleWindowHotkeyEvent({
-        eventType: event.type,
-        key: event.key,
-        code: event.code,
-        repeat: event.repeat,
-      });
+    const forwardKey = (event: KeyboardEvent) => {
+      if (!isWindowHotkeyCandidate(event)) return;
+      void handleWindowHotkeyEvent(
+        event.type as 'keydown' | 'keyup',
+        event.key,
+        event.code,
+        event.repeat,
+      ).catch(error => console.warn('[window-hotkey] forward failed', error));
     };
-
-    window.addEventListener('keydown', onKeyboardEvent, true);
-    window.addEventListener('keyup', onKeyboardEvent, true);
+    window.addEventListener('keydown', forwardKey, true);
+    window.addEventListener('keyup', forwardKey, true);
     return () => {
-      window.removeEventListener('keydown', onKeyboardEvent, true);
-      window.removeEventListener('keyup', onKeyboardEvent, true);
+      window.removeEventListener('keydown', forwardKey, true);
+      window.removeEventListener('keyup', forwardKey, true);
     };
   }, [os]);
 
@@ -120,6 +84,16 @@ export function App({ isCapsule }: AppProps) {
     <HotkeySettingsProvider>
       {gate === 'onboarding' ? <Onboarding onComplete={() => setGate('ready')} /> : <FloatingShell />}
     </HotkeySettingsProvider>
+  );
+}
+
+function isWindowHotkeyCandidate(event: KeyboardEvent): boolean {
+  return (
+    event.key === 'Escape' ||
+    event.code === 'ControlRight' ||
+    event.code === 'ControlLeft' ||
+    event.code === 'AltRight' ||
+    event.code === 'MetaRight'
   );
 }
 
