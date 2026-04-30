@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { AboutUpdateControl, Settings as SettingsContent, type SettingsSectionId } from '../pages/Settings';
 import { Row } from './ui/Row';
+import { readFontScale, setFontScale, type FontScaleId } from '../lib/fontScale';
 import { openExternal } from '../lib/ipc';
 import {
   FOLLOW_SYSTEM,
@@ -186,10 +187,51 @@ function PersonalizeSection() {
     window.localStorage.setItem('ol.glassBlur', String(blur));
   }, [blur]);
 
+  const [fontScale, setFontScaleState] = useState<FontScaleId>(() => readFontScale());
+  const applyFontScaleChoice = (next: FontScaleId) => {
+    setFontScaleState(next);
+    setFontScale(next);
+  };
+  const fontOptions: Array<[FontScaleId, string]> = [
+    ['small', t('modal.personalize.fontSmall')],
+    ['medium', t('modal.personalize.fontMedium')],
+    ['large', t('modal.personalize.fontLarge')],
+  ];
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <Row label={t('modal.personalize.language')}>
         <LanguagePicker />
+      </Row>
+      <Row label={t('modal.personalize.font')} desc={t('modal.personalize.fontDesc')}>
+        <div style={{ display: 'flex', gap: 4, padding: 2, background: 'rgba(0,0,0,0.04)', borderRadius: 8 }}>
+          {fontOptions.map(([id, label]) => {
+            const selected = fontScale === id;
+            return (
+              <button
+                key={id}
+                onClick={() => applyFontScaleChoice(id)}
+                style={{
+                  minWidth: 64,
+                  height: 28,
+                  border: 0,
+                  borderRadius: 6,
+                  background: selected ? '#fff' : 'transparent',
+                  color: selected ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
+                  fontFamily: 'inherit',
+                  fontSize: 12,
+                  fontWeight: selected ? 600 : 500,
+                  cursor: 'default',
+                  boxShadow: selected ? '0 1px 2px rgba(0,0,0,.06), 0 0 0 0.5px rgba(0,0,0,.06)' : 'none',
+                  transition: 'background 0.12s ease-out, color 0.12s ease-out, box-shadow 0.12s ease-out',
+                  padding: '0 12px',
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
       </Row>
       <Row label={t('modal.personalize.blur')} desc={t('modal.personalize.blurDesc')}>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>

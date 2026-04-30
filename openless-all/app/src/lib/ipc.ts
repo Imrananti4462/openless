@@ -36,7 +36,7 @@ export async function invokeOrMock<T>(
 
 // ── Mock fixtures ──────────────────────────────────────────────────────
 const mockSettings: UserPreferences = {
-  hotkey: { trigger: 'rightControl', mode: 'hold' },
+  hotkey: { trigger: 'rightControl', mode: 'toggle' },
   defaultMode: 'structured',
   enabledModes: ['raw', 'light', 'structured', 'formal'],
   launchAtLogin: false,
@@ -52,7 +52,7 @@ const mockHotkeyCapability: HotkeyCapability = {
   supportsModifierOnlyTrigger: true,
   supportsSideSpecificModifiers: true,
   explicitFallbackAvailable: false,
-  statusHint: '默认建议使用“右 Control + 按住说话”；若无响应，可在权限页查看 hook 安装状态。',
+  statusHint: '默认建议使用“右 Control + 切换式说话”；若更习惯按住说话，可在录音设置里切回。若无响应，可在权限页查看 hook 安装状态。',
 };
 
 const mockCredentialsStatus: CredentialsStatus = {

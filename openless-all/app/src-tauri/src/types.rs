@@ -76,7 +76,7 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct UserPreferences {
     pub hotkey: HotkeyBinding,
     pub default_mode: PolishMode,
@@ -158,7 +158,7 @@ impl HotkeyAdapterKind {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct HotkeyBinding {
     pub trigger: HotkeyTrigger,
     pub mode: HotkeyMode,
@@ -213,7 +213,7 @@ impl HotkeyCapability {
                 supports_side_specific_modifiers: true,
                 explicit_fallback_available: false,
                 status_hint: Some(
-                    "默认建议使用“右 Control + 按住说话”；若无响应，可在权限页查看 hook 安装状态。"
+                    "默认建议使用“右 Control + 切换式说话”；若更习惯按住说话，可在录音设置里切回。若无响应，可在权限页查看 hook 安装状态。"
                         .into(),
                 ),
             };
@@ -287,7 +287,7 @@ impl Default for HotkeyBinding {
         {
             Self {
                 trigger: HotkeyTrigger::RightControl,
-                mode: HotkeyMode::Hold,
+                mode: HotkeyMode::Toggle,
             }
         }
 
