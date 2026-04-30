@@ -163,6 +163,10 @@ impl Coordinator {
     }
 
     pub async fn stop_dictation(&self) -> Result<(), String> {
+        if self.inner.state.lock().phase == SessionPhase::Starting {
+            request_stop_during_starting(&self.inner, "manual stop");
+            return Ok(());
+        }
         end_session(&self.inner).await
     }
 
@@ -297,8 +301,7 @@ async fn handle_pressed(inner: &Arc<Inner>) {
         // Toggle 模式 Starting 阶段第二次按 → 用户想停。
         // 不能直接 end_session（ASR session 还没建好），存边沿，握手完成后立即触发。
         (HotkeyMode::Toggle, SessionPhase::Starting) => {
-            inner.state.lock().pending_stop = true;
-            log::info!("[coord] toggle stop edge during Starting — queued");
+            request_stop_during_starting(inner, "toggle stop edge");
         }
         _ => {}
     }
@@ -322,11 +325,38 @@ async fn handle_released(inner: &Arc<Inner>) {
             }
             // Hold 模式 Starting 阶段松开 → 用户想停。同上：握手完成后再 end。
             SessionPhase::Starting => {
-                inner.state.lock().pending_stop = true;
-                log::info!("[coord] hold release edge during Starting — queued");
+                request_stop_during_starting(inner, "hold release edge");
             }
             _ => {}
         }
+    }
+}
+
+fn request_stop_during_starting(inner: &Arc<Inner>, reason: &str) {
+    {
+        let mut state = inner.state.lock();
+        if state.phase != SessionPhase::Starting {
+            return;
+        }
+        state.pending_stop = true;
+    }
+    log::info!("[coord] {reason} during Starting — queued");
+    stop_recorder_if_pending_start_stop(inner);
+}
+
+fn stop_recorder_if_pending_start_stop(inner: &Arc<Inner>) {
+    let should_stop = {
+        let state = inner.state.lock();
+        state.phase == SessionPhase::Starting && state.pending_stop
+    };
+    if !should_stop {
+        return;
+    }
+    if let Some(rec) = inner.recorder.lock().take() {
+        rec.stop();
+        let elapsed = inner.state.lock().started_at.elapsed().as_millis() as u64;
+        emit_capsule(inner, CapsuleState::Transcribing, 0.0, elapsed, None, None);
+        log::info!("[coord] stopped recorder while ASR is still connecting");
     }
 }
 
@@ -446,19 +476,37 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
     emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
 
     let active_asr = CredentialsVault::get_active_asr();
-    let hotwords = enabled_hotwords(inner);
 
-    let consumer: Arc<dyn crate::recorder::AudioConsumer> = if active_asr == "whisper" {
+    if active_asr == "whisper" {
         let (api_key, base_url, model) = read_whisper_credentials();
         let whisper = Arc::new(WhisperBatchASR::new(api_key, base_url, model));
         *inner.asr.lock() = Some(ActiveAsr::Whisper(Arc::clone(&whisper)));
-        let c: Arc<dyn crate::recorder::AudioConsumer> = whisper;
-        c
+        let consumer: Arc<dyn crate::recorder::AudioConsumer> = whisper;
+        start_recorder_and_enter_listening(inner, &active_asr, consumer).await?;
     } else {
+        let hotwords = enabled_hotwords(inner);
         let creds = read_volc_credentials();
         let asr = Arc::new(VolcengineStreamingASR::new(creds, hotwords));
+        let bridge = Arc::new(DeferredAsrBridge::new());
+        let consumer: Arc<dyn crate::recorder::AudioConsumer> = bridge.clone();
+        *inner.asr.lock() = Some(ActiveAsr::Volcengine(Arc::clone(&asr)));
+        start_recorder_for_starting(inner, &active_asr, consumer)?;
+
         if let Err(e) = asr.open_session().await {
             log::error!("[coord] open ASR session failed: {e}");
+            if let Some(rec) = inner.recorder.lock().take() {
+                rec.stop();
+            }
+            if let Some(asr) = inner.asr.lock().take() {
+                match asr {
+                    ActiveAsr::Volcengine(v) => v.cancel(),
+                    ActiveAsr::Whisper(w) => w.cancel(),
+                }
+            }
+            if cancel_raced_during_starting(inner) {
+                inner.state.lock().phase = SessionPhase::Idle;
+                return Ok(());
+            }
             emit_capsule(
                 inner,
                 CapsuleState::Error,
@@ -477,16 +525,26 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         if cancel_raced_during_starting(inner) {
             log::info!("[coord] cancel raced during ASR open_session — aborting begin");
             asr.cancel();
+            if let Some(rec) = inner.recorder.lock().take() {
+                rec.stop();
+            }
             inner.state.lock().phase = SessionPhase::Idle;
             return Ok(());
         }
-        let c: Arc<dyn crate::recorder::AudioConsumer> = Arc::new(AsrBridge {
-            asr: Arc::clone(&asr),
-        });
-        *inner.asr.lock() = Some(ActiveAsr::Volcengine(asr));
-        c
-    };
+        let target: Arc<dyn crate::asr::AudioConsumer> = asr;
+        let flushed_bytes = bridge.attach(target);
+        log::info!("[coord] ASR connected; flushed {flushed_bytes} deferred audio bytes");
+        finish_starting_session(inner).await;
+    }
 
+    Ok(())
+}
+
+fn start_recorder_for_starting(
+    inner: &Arc<Inner>,
+    active_asr: &str,
+    consumer: Arc<dyn crate::recorder::AudioConsumer>,
+) -> Result<(), String> {
     let inner_for_level = Arc::clone(inner);
     // 节流：电平回调本身约 185 Hz（cpal 默认音频块），全部转发到前端会让 CSS
     // transition 互相覆盖、视觉上"被平均"成静止。限制为 ~30 Hz（33ms 最少间隔），
@@ -526,44 +584,9 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     match Recorder::start(consumer, level_handler) {
         Ok(rec) => {
-            // audit HIGH #1：转 Listening 之前在同一 lock 内检查 cancel race。
-            // 之前是无条件 phase=Listening，会把 cancel_session 在 await 期间设的 Idle
-            // 反向覆盖回 Listening → 用户的 cancel 边沿被吞掉。
-            let outcome = {
-                let mut state = inner.state.lock();
-                if state.cancelled || state.phase != SessionPhase::Starting {
-                    BeginOutcome::CancelRaced
-                } else {
-                    state.phase = SessionPhase::Listening;
-                    let pending = std::mem::replace(&mut state.pending_stop, false);
-                    if pending {
-                        BeginOutcome::PendingStop
-                    } else {
-                        BeginOutcome::Started
-                    }
-                }
-            };
-            match outcome {
-                BeginOutcome::CancelRaced => {
-                    log::info!("[coord] cancel raced during recorder start — aborting begin");
-                    rec.stop();
-                    if let Some(asr) = inner.asr.lock().take() {
-                        match asr {
-                            ActiveAsr::Volcengine(v) => v.cancel(),
-                            ActiveAsr::Whisper(w) => w.cancel(),
-                        }
-                    }
-                    inner.state.lock().phase = SessionPhase::Idle;
-                }
-                BeginOutcome::Started | BeginOutcome::PendingStop => {
-                    *inner.recorder.lock() = Some(rec);
-                    log::info!("[coord] session started (asr={})", active_asr);
-                    if matches!(outcome, BeginOutcome::PendingStop) {
-                        log::info!("[coord] applying pending_stop edge → end_session immediately");
-                        let _ = end_session(inner).await;
-                    }
-                }
-            }
+            *inner.recorder.lock() = Some(rec);
+            stop_recorder_if_pending_start_stop(inner);
+            log::info!("[coord] recorder started (asr={active_asr}, phase=Starting)");
         }
         Err(e) => {
             log::error!("[coord] recorder start failed: {e}");
@@ -588,6 +611,58 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+async fn start_recorder_and_enter_listening(
+    inner: &Arc<Inner>,
+    active_asr: &str,
+    consumer: Arc<dyn crate::recorder::AudioConsumer>,
+) -> Result<(), String> {
+    start_recorder_for_starting(inner, active_asr, consumer)?;
+    finish_starting_session(inner).await;
+    Ok(())
+}
+
+async fn finish_starting_session(inner: &Arc<Inner>) {
+    // audit HIGH #1：转 Listening 之前在同一 lock 内检查 cancel race。
+    // 之前是无条件 phase=Listening，会把 cancel_session 在 await 期间设的 Idle
+    // 反向覆盖回 Listening → 用户的 cancel 边沿被吞掉。
+    let outcome = {
+        let mut state = inner.state.lock();
+        if state.cancelled || state.phase != SessionPhase::Starting {
+            BeginOutcome::CancelRaced
+        } else {
+            state.phase = SessionPhase::Listening;
+            let pending = std::mem::replace(&mut state.pending_stop, false);
+            if pending {
+                BeginOutcome::PendingStop
+            } else {
+                BeginOutcome::Started
+            }
+        }
+    };
+    match outcome {
+        BeginOutcome::CancelRaced => {
+            log::info!("[coord] cancel raced during recorder/ASR startup — aborting begin");
+            if let Some(rec) = inner.recorder.lock().take() {
+                rec.stop();
+            }
+            if let Some(asr) = inner.asr.lock().take() {
+                match asr {
+                    ActiveAsr::Volcengine(v) => v.cancel(),
+                    ActiveAsr::Whisper(w) => w.cancel(),
+                }
+            }
+            inner.state.lock().phase = SessionPhase::Idle;
+        }
+        BeginOutcome::Started | BeginOutcome::PendingStop => {
+            log::info!("[coord] session started");
+            if matches!(outcome, BeginOutcome::PendingStop) {
+                log::info!("[coord] applying pending_stop edge → end_session immediately");
+                let _ = end_session(inner).await;
+            }
+        }
+    }
 }
 
 async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
@@ -1028,6 +1103,47 @@ mod tests {
         ));
         assert!(!window_key_matches_trigger(HotkeyTrigger::Fn, "Fn", "Fn"));
     }
+
+    #[test]
+    fn deferred_asr_bridge_flushes_startup_audio_before_live_chunks() {
+        #[derive(Default)]
+        struct RecordingConsumer {
+            bytes: Mutex<Vec<u8>>,
+        }
+
+        impl crate::asr::AudioConsumer for RecordingConsumer {
+            fn consume_pcm_chunk(&self, pcm: &[u8]) {
+                self.bytes.lock().extend_from_slice(pcm);
+            }
+        }
+
+        let bridge = DeferredAsrBridge::new();
+        crate::recorder::AudioConsumer::consume_pcm_chunk(&bridge, &[1, 2]);
+        crate::recorder::AudioConsumer::consume_pcm_chunk(&bridge, &[3, 4]);
+
+        let target = Arc::new(RecordingConsumer::default());
+        let target_for_attach: Arc<dyn crate::asr::AudioConsumer> = target.clone();
+        assert_eq!(bridge.attach(target_for_attach), 4);
+
+        crate::recorder::AudioConsumer::consume_pcm_chunk(&bridge, &[5, 6]);
+        assert_eq!(&*target.bytes.lock(), &[1, 2, 3, 4, 5, 6]);
+    }
+
+    #[tokio::test]
+    async fn manual_stop_during_starting_is_queued() {
+        let coordinator = Coordinator::new();
+        {
+            let mut state = coordinator.inner.state.lock();
+            state.phase = SessionPhase::Starting;
+            state.pending_stop = false;
+        }
+
+        coordinator.stop_dictation().await.unwrap();
+
+        let state = coordinator.inner.state.lock();
+        assert_eq!(state.phase, SessionPhase::Starting);
+        assert!(state.pending_stop);
+    }
 }
 
 fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {
@@ -1113,12 +1229,68 @@ fn emit_capsule(
 
 // ─────────────────────────── audio bridge ───────────────────────────
 
-struct AsrBridge {
-    asr: Arc<VolcengineStreamingASR>,
+struct DeferredAsrBridge {
+    state: Mutex<DeferredAsrState>,
 }
 
-impl crate::recorder::AudioConsumer for AsrBridge {
+struct DeferredAsrState {
+    target: Option<Arc<dyn crate::asr::AudioConsumer>>,
+    pending_audio: Vec<u8>,
+    attaching: bool,
+}
+
+impl DeferredAsrBridge {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(DeferredAsrState {
+                target: None,
+                pending_audio: Vec::new(),
+                attaching: false,
+            }),
+        }
+    }
+
+    fn attach(&self, target: Arc<dyn crate::asr::AudioConsumer>) -> usize {
+        let mut flushed_bytes = 0;
+        {
+            let mut state = self.state.lock();
+            state.attaching = true;
+        }
+
+        loop {
+            let pending = {
+                let mut state = self.state.lock();
+                if state.pending_audio.is_empty() {
+                    state.target = Some(Arc::clone(&target));
+                    state.attaching = false;
+                    return flushed_bytes;
+                }
+                std::mem::take(&mut state.pending_audio)
+            };
+            flushed_bytes += pending.len();
+            target.consume_pcm_chunk(&pending);
+        }
+    }
+}
+
+impl crate::recorder::AudioConsumer for DeferredAsrBridge {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
-        crate::asr::AudioConsumer::consume_pcm_chunk(&*self.asr, pcm);
+        let target = {
+            let mut state = self.state.lock();
+            if state.attaching {
+                state.pending_audio.extend_from_slice(pcm);
+                return;
+            }
+            if let Some(target) = state.target.as_ref() {
+                Some(Arc::clone(target))
+            } else {
+                state.pending_audio.extend_from_slice(pcm);
+                None
+            }
+        };
+
+        if let Some(target) = target {
+            target.consume_pcm_chunk(pcm);
+        }
     }
 }
