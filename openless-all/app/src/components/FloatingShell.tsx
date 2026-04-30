@@ -4,7 +4,8 @@
 //
 // Ported verbatim from design_handoff_openless/variants.jsx::FloatingShell.
 
-import { useEffect, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { WindowChrome, detectOS, type OS } from './WindowChrome';
 import { SettingsModal } from './SettingsModal';
@@ -31,11 +32,11 @@ interface NavItem {
   cmp: ComponentType;
 }
 
-const NAV: NavItem[] = [
-  { id: 'overview', name: '概览', icon: 'overview', cmp: Overview },
-  { id: 'history', name: '历史', icon: 'history', cmp: History },
-  { id: 'vocab', name: '词汇表', icon: 'vocab', cmp: Vocab },
-  { id: 'style', name: '风格', icon: 'style', cmp: Style },
+const NAV_BASE: Array<Omit<NavItem, 'name'>> = [
+  { id: 'overview', icon: 'overview', cmp: Overview },
+  { id: 'history', icon: 'history', cmp: History },
+  { id: 'vocab', icon: 'vocab', cmp: Vocab },
+  { id: 'style', icon: 'style', cmp: Style },
 ];
 
 interface FloatingShellProps {
@@ -54,10 +55,15 @@ export function FloatingShell({ os: osProp, initialTab = 'overview', initialSett
 }
 
 function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initialTab: AppTab; initialSettings: boolean }) {
+  const { t } = useTranslation();
   const { currentTab, setCurrentTab, settingsOpen, setSettingsOpen } = useAppState(initialTab, initialSettings);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId | undefined>();
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const { hotkey } = useHotkeySettings();
+  const NAV = useMemo<NavItem[]>(
+    () => NAV_BASE.map(b => ({ ...b, name: t(`nav.${b.id}`) })),
+    [t],
+  );
   const Page = (NAV.find((n) => n.id === currentTab) ?? NAV[0]).cmp;
 
   useEffect(() => {
@@ -86,7 +92,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
 
   const openProviderSettings = () => {
     rememberProviderPrompt();
-    openSettings('提供商');
+    openSettings('providers');
   };
 
   return (
@@ -171,7 +177,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
               marginTop: 8,
             }}>
 
-            <div style={{ fontSize: 10.5, color: 'var(--ol-ink-4)', marginBottom: 6, letterSpacing: '0.02em' }}>录音快捷键</div>
+            <div style={{ fontSize: 10.5, color: 'var(--ol-ink-4)', marginBottom: 6, letterSpacing: '0.02em' }}>{t('shell.shortcutLabel')}</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--ol-ink-2)' }}>
               <kbd style={{
               padding: '2px 7px', fontSize: 10.5,
@@ -180,7 +186,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
                 fontFamily: 'var(--ol-font-mono)', color: 'var(--ol-ink)',
                 boxShadow: '0 1px 0 rgba(0,0,0,.04)',
               }}>{getHotkeyTriggerLabel(hotkey?.trigger)}</kbd>
-              <span style={{ color: 'var(--ol-ink-4)' }}>开始 / 停止</span>
+              <span style={{ color: 'var(--ol-ink-4)' }}>{t('shell.shortcutHint')}</span>
             </div>
           </div>
 
@@ -194,8 +200,8 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
               border: '0.5px solid rgba(37,99,235,0.15)',
             }}>
 
-            <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--ol-blue)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>BETA</div>
-            <div style={{ fontSize: 11.5, color: 'var(--ol-ink-2)', marginTop: 4, lineHeight: 1.5 }}>所有数据都只保存在本机。</div>
+            <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--ol-blue)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>{t('shell.betaTag')}</div>
+            <div style={{ fontSize: 11.5, color: 'var(--ol-ink-2)', marginTop: 4, lineHeight: 1.5 }}>{t('shell.betaNote')}</div>
           </div>
         </aside>
 
@@ -238,14 +244,14 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
           zIndex: 2,
         }}>
 
-        <FooterIcon name="user" tip="账户" onClick={() => openSettings('提供商')} />
-        <FooterIcon name="mail" tip="反馈" onClick={() => openExternal('https://github.com/appergb/openless/issues')} />
-        <FooterIcon name="settings" tip="设置" active={settingsOpen} onClick={() => openSettings()} />
-        <FooterIcon name="help" tip="帮助" onClick={() => openExternal('https://github.com/appergb/openless#readme')} />
+        <FooterIcon name="user" tip={t('shell.footer.account')} onClick={() => openSettings('providers')} />
+        <FooterIcon name="mail" tip={t('shell.footer.feedback')} onClick={() => openExternal('https://github.com/appergb/openless/issues')} />
+        <FooterIcon name="settings" tip={t('shell.footer.settings')} active={settingsOpen} onClick={() => openSettings()} />
+        <FooterIcon name="help" tip={t('shell.footer.help')} onClick={() => openExternal('https://github.com/appergb/openless#readme')} />
 
         <div style={{ flex: 1 }} />
 
-        <span style={{ fontFamily: 'var(--ol-font-sans)' }}>版本 {APP_VERSION_LABEL}</span>
+        <span style={{ fontFamily: 'var(--ol-font-sans)' }}>{t('shell.footer.version', { version: APP_VERSION_LABEL })}</span>
         <button
           onClick={() => openExternal('https://github.com/appergb/openless/releases')}
           style={{
@@ -261,7 +267,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
             padding: 0,
           }}
         >
-          检查更新
+          {t('shell.footer.checkUpdates')}
         </button>
       </div>
 
@@ -286,6 +292,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
 }
 
 function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void; onOpenSettings: () => void }) {
+  const { t } = useTranslation();
   return (
     <div
       style={{
@@ -327,10 +334,10 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
           >
             <Icon name="settings" size={17} />
           </div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>设置语音提供商</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>{t('shell.providerPrompt.title')}</div>
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.55 }}>
-          还没有配置 ASR 或 LLM 提供商，语音输入和润色暂时无法正常工作。
+          {t('shell.providerPrompt.body')}
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
           <button
@@ -348,7 +355,7 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
               cursor: 'default',
             }}
           >
-            稍后
+            {t('shell.providerPrompt.later')}
           </button>
           <button
             onClick={onOpenSettings}
@@ -365,7 +372,7 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
               cursor: 'default',
             }}
           >
-            去设置
+            {t('shell.providerPrompt.openSettings')}
           </button>
         </div>
       </div>

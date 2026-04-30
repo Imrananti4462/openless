@@ -1,8 +1,9 @@
 // Settings.tsx — ported verbatim from design_handoff_openless/pages.jsx::Settings.
-// Internal sub-sections (Recording / Providers / Shortcuts / Permissions / About)
+// Internal sub-sections (Recording / Providers / Shortcuts / Permissions / Language / About)
 // keep their inline-style literals 1:1 with the source JSX.
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import { getHotkeyStartStopLabel, getHotkeyTriggerLabel } from '../lib/hotkey';
@@ -27,6 +28,12 @@ import type {
   PermissionStatus,
 } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
+import i18n, {
+  FOLLOW_SYSTEM,
+  getLocalePreference,
+  setLocalePreference,
+  type SupportedLocale,
+} from '../i18n';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 
 interface SettingsProps {
@@ -34,11 +41,13 @@ interface SettingsProps {
   initialSection?: SettingsSectionId;
 }
 
-export type SettingsSectionId = '录音' | '提供商' | '快捷键' | '权限' | '关于';
+export type SettingsSectionId = 'recording' | 'providers' | 'shortcuts' | 'permissions' | 'language' | 'about';
 
-export function Settings({ embedded = false, initialSection = '录音' }: SettingsProps) {
+const SECTION_ORDER: SettingsSectionId[] = ['recording', 'providers', 'shortcuts', 'permissions', 'language', 'about'];
+
+export function Settings({ embedded = false, initialSection = 'recording' }: SettingsProps) {
+  const { t } = useTranslation();
   const [section, setSection] = useState<SettingsSectionId>(initialSection);
-  const sections: SettingsSectionId[] = ['录音', '提供商', '快捷键', '权限', '关于'];
 
   useEffect(() => {
     setSection(initialSection);
@@ -48,14 +57,14 @@ export function Settings({ embedded = false, initialSection = '录音' }: Settin
     <>
       {!embedded && (
         <PageHeader
-          kicker="SETTINGS"
-          title="设置"
-          desc="录音方式、模型与语音提供商、快捷键、权限与关于信息——全部在这里。"
+          kicker={t('settings.kicker')}
+          title={t('settings.title')}
+          desc={t('settings.desc')}
         />
       )}
       <div style={{ display: 'grid', gridTemplateColumns: embedded ? '120px 1fr' : '160px 1fr', gap: 18 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {sections.map(s => (
+          {SECTION_ORDER.map(s => (
             <button
               key={s}
               onClick={() => setSection(s)}
@@ -67,16 +76,17 @@ export function Settings({ embedded = false, initialSection = '录音' }: Settin
                 cursor: 'default',
               }}
             >
-              {s}
+              {t(`settings.sections.${s}`)}
             </button>
           ))}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {section === '录音' && <RecordingSection />}
-          {section === '提供商' && <ProvidersSection />}
-          {section === '快捷键' && <ShortcutsSection />}
-          {section === '权限' && <PermissionsSection />}
-          {section === '关于' && <AboutSection />}
+          {section === 'recording' && <RecordingSection />}
+          {section === 'providers' && <ProvidersSection />}
+          {section === 'shortcuts' && <ShortcutsSection />}
+          {section === 'permissions' && <PermissionsSection />}
+          {section === 'language' && <LanguageSection />}
+          {section === 'about' && <AboutSection />}
         </div>
       </div>
     </>
@@ -102,12 +112,13 @@ function SettingRow({ label, desc, children }: SettingRowProps) {
 }
 
 function RecordingSection() {
+  const { t } = useTranslation();
   const { prefs, capability, updatePrefs: savePrefs } = useHotkeySettings();
 
   if (!prefs || !capability) {
     return (
       <Card>
-        <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>加载中…</div>
+        <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>
       </Card>
     );
   }
@@ -120,18 +131,18 @@ function RecordingSection() {
     savePrefs({ ...prefs, showCapsule });
 
   const choices: Array<[HotkeyMode, string]> = [
-    ['toggle', '切换式'],
-    ['hold', '按住说话'],
+    ['toggle', t('settings.recording.modeToggle')],
+    ['hold', t('settings.recording.modeHold')],
   ];
   const hotkeyDesc = capability.requiresAccessibilityPermission
-    ? '按下即开始捕获语音，全局生效。需要授予辅助功能权限。'
-    : '按下即开始捕获语音，全局生效。无需额外辅助功能授权。';
+    ? t('settings.recording.hotkeyDescAcc')
+    : t('settings.recording.hotkeyDescNoAcc');
 
   return (
     <Card>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>录音</div>
-      <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 6 }}>定义全局录音的快捷键与触发方式。</div>
-      <SettingRow label="录音快捷键" desc={hotkeyDesc}>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('settings.recording.title')}</div>
+      <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 6 }}>{t('settings.recording.desc')}</div>
+      <SettingRow label={t('settings.recording.hotkeyLabel')} desc={hotkeyDesc}>
         <select
           value={prefs.hotkey.trigger}
           onChange={e => onTriggerChange(e.target.value as HotkeyTrigger)}
@@ -141,12 +152,12 @@ function RecordingSection() {
             fontFamily: 'var(--ol-font-mono)',
           }}
         >
-          {capability.availableTriggers.map(t => (
-            <option key={t} value={t}>{getHotkeyTriggerLabel(t)}</option>
+          {capability.availableTriggers.map(tr => (
+            <option key={tr} value={tr}>{getHotkeyTriggerLabel(tr)}</option>
           ))}
         </select>
       </SettingRow>
-      <SettingRow label="录音方式" desc="切换式 = 按一次开始、再按一次结束；按住说话 = 按住开始、松开结束。">
+      <SettingRow label={t('settings.recording.modeLabel')} desc={t('settings.recording.modeDesc')}>
         <div style={{ display: 'inline-flex', padding: 2, borderRadius: 8, background: 'rgba(0,0,0,0.05)' }}>
           {choices.map(([v, l]) => (
             <button
@@ -166,7 +177,7 @@ function RecordingSection() {
           ))}
         </div>
       </SettingRow>
-      <SettingRow label="录音胶囊" desc="录音 / 转写时在屏幕底部显示半透明胶囊。">
+      <SettingRow label={t('settings.recording.capsuleLabel')} desc={t('settings.recording.capsuleDesc')}>
         <Toggle on={prefs.showCapsule} onToggle={onShowCapsuleChange} />
       </SettingRow>
       {capability.statusHint && (
@@ -200,11 +211,11 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle?: (next: boolean) => v
 }
 
 const LLM_PRESETS = [
-  { id: 'ark',          name: 'ARK（火山方舟）', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', modelPlaceholder: 'deepseek-v3-2' },
-  { id: 'deepseek',     name: 'DeepSeek',        baseUrl: 'https://api.deepseek.com/v1',             modelPlaceholder: 'deepseek-chat' },
-  { id: 'siliconflow',  name: '硅基流动',         baseUrl: 'https://api.siliconflow.cn/v1',           modelPlaceholder: 'Qwen/Qwen2.5-7B-Instruct' },
-  { id: 'openai',       name: 'OpenAI',          baseUrl: 'https://api.openai.com/v1',               modelPlaceholder: 'gpt-4o' },
-  { id: 'custom',       name: '自定义',           baseUrl: '',                                        modelPlaceholder: '' },
+  { id: 'ark',          nameKey: 'ark',         baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', modelPlaceholder: 'deepseek-v3-2' },
+  { id: 'deepseek',     nameKey: 'deepseek',    baseUrl: 'https://api.deepseek.com/v1',             modelPlaceholder: 'deepseek-chat' },
+  { id: 'siliconflow',  nameKey: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1',           modelPlaceholder: 'Qwen/Qwen2.5-7B-Instruct' },
+  { id: 'openai',       nameKey: 'openai',      baseUrl: 'https://api.openai.com/v1',               modelPlaceholder: 'gpt-4o' },
+  { id: 'custom',       nameKey: 'custom',      baseUrl: '',                                        modelPlaceholder: '' },
 ] as const;
 
 type LlmPresetId = typeof LLM_PRESETS[number]['id'];
@@ -212,14 +223,15 @@ type LlmPresetId = typeof LLM_PRESETS[number]['id'];
 const ASR_DEFAULT_RESOURCE_ID = 'volc.bigasr.sauc.duration';
 
 const ASR_PRESETS = [
-  { id: 'volcengine',  name: '火山引擎 bigasr' },
-  { id: 'siliconflow', name: '硅基流动 SenseVoice' },
-  { id: 'whisper',     name: 'OpenAI Whisper（兼容）' },
+  { id: 'volcengine',  nameKey: 'asrVolcengine'  },
+  { id: 'siliconflow', nameKey: 'asrSiliconflow' },
+  { id: 'whisper',     nameKey: 'asrWhisper'     },
 ] as const;
 
 type AsrPresetId = typeof ASR_PRESETS[number]['id'];
 
 function ProvidersSection() {
+  const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
   const [llmProvider, setLlmProvider] = useState<LlmPresetId>('ark');
   const [asrProvider, setAsrProvider] = useState<AsrPresetId>('volcengine');
@@ -260,19 +272,19 @@ function ProvidersSection() {
     <>
       <Card>
         <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>LLM 模型（润色）</div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.providers.llmTitle')}</div>
           <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 2 }}>
-            OpenAI 兼容协议，支持多家供应商切换。
+            {t('settings.providers.llmDesc')}
           </div>
         </div>
-        <SettingRow label="供应商" desc="选择后将自动填入 Base URL 默认值。">
+        <SettingRow label={t('settings.providers.providerLabel')} desc={t('settings.providers.llmProviderDesc')}>
           <select
             value={llmProvider}
             onChange={e => onLlmProviderChange(e.target.value as LlmPresetId)}
             style={{ ...inputStyle, maxWidth: 200 }}
           >
             {LLM_PRESETS.map(p => (
-              <option key={p.id} value={p.id}>{p.name}</option>
+              <option key={p.id} value={p.id}>{t(`settings.providers.presets.${p.nameKey}`)}</option>
             ))}
           </select>
         </SettingRow>
@@ -285,17 +297,17 @@ function ProvidersSection() {
 
       <Card>
         <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>ASR 语音（转写）</div>
-          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 2 }}>用于将口述实时转写为文本。</div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.providers.asrTitle')}</div>
+          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 2 }}>{t('settings.providers.asrDesc')}</div>
         </div>
-        <SettingRow label="供应商" desc="切换后将自动选用对应凭据。">
+        <SettingRow label={t('settings.providers.providerLabel')} desc={t('settings.providers.asrProviderDesc')}>
           <select
             value={asrProvider}
             onChange={e => onAsrProviderChange(e.target.value as AsrPresetId)}
             style={{ ...inputStyle, maxWidth: 200 }}
           >
             {ASR_PRESETS.map(p => (
-              <option key={p.id} value={p.id}>{p.name}</option>
+              <option key={p.id} value={p.id}>{t(`settings.providers.presets.${p.nameKey}`)}</option>
             ))}
           </select>
         </SettingRow>
@@ -338,6 +350,7 @@ interface CredentialFieldProps {
 }
 
 function CredentialField({ label, account, placeholder, mono, mask, defaultValue }: CredentialFieldProps) {
+  const { t } = useTranslation();
   const [value, setValue] = useState('');
   const [revealed, setRevealed] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -394,14 +407,14 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
           style={{ ...inputStyle, fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
         />
         {defaultValue && !value && (
-          <button onClick={fillDefault} title="填入默认值" style={iconBtnStyle}>
+          <button onClick={fillDefault} title={t('settings.providers.fillDefault')} style={iconBtnStyle}>
             <Icon name="check" size={13} />
           </button>
         )}
         {mask && (
           <button
             onClick={() => setRevealed(r => !r)}
-            title={revealed ? '隐藏' : '显示'}
+            title={revealed ? t('common.hide') : t('common.show')}
             style={iconBtnStyle}
           >
             <Icon name="eye" size={14} />
@@ -409,14 +422,14 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
         )}
         <button
           onClick={() => navigator.clipboard?.writeText(value)}
-          title="复制"
+          title={t('common.copy')}
           style={iconBtnStyle}
           disabled={!value}
         >
           <Icon name="copy" size={14} />
         </button>
         {saved && (
-          <span style={{ fontSize: 11, color: 'var(--ol-ok)', whiteSpace: 'nowrap' }}>已保存</span>
+          <span style={{ fontSize: 11, color: 'var(--ol-ok)', whiteSpace: 'nowrap' }}>{t('common.saved')}</span>
         )}
       </div>
     </SettingRow>
@@ -440,29 +453,31 @@ const iconBtnStyle: CSSProperties = {
 };
 
 function ShortcutsSection() {
+  const { t } = useTranslation();
   const { hotkey, capability } = useHotkeySettings();
 
   if (!hotkey || !capability) {
     return (
       <Card>
-        <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>加载中…</div>
+        <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>
       </Card>
     );
   }
 
   const desc = capability.requiresAccessibilityPermission
-    ? '所有快捷键全局生效，需要在权限设置中开启辅助功能。'
-    : '所有快捷键全局生效。若无响应，请在权限页查看全局快捷键监听状态。';
+    ? t('settings.shortcuts.descAcc')
+    : t('settings.shortcuts.descNoAcc');
+  const notSupported = t('settings.shortcuts.notSupported');
   const rows: Array<[string, string]> = [
-    ['开始 / 停止录音', getHotkeyStartStopLabel(hotkey)],
-    ['取消本次录音', 'Esc'],
-    ['胶囊确认插入', '点击右侧 ✓'],
-    ['切换上一次风格', capability.requiresAccessibilityPermission ? '⌘ ⇧ S' : '暂未支持'],
-    ['打开 OpenLess', capability.requiresAccessibilityPermission ? '⌘ ⇧ O' : '暂未支持'],
+    [t('settings.shortcuts.startStop'), getHotkeyStartStopLabel(hotkey)],
+    [t('settings.shortcuts.cancel'), 'Esc'],
+    [t('settings.shortcuts.confirm'), t('settings.shortcuts.confirmHint')],
+    [t('settings.shortcuts.switchStyle'), capability.requiresAccessibilityPermission ? '⌘ ⇧ S' : notSupported],
+    [t('settings.shortcuts.openApp'), capability.requiresAccessibilityPermission ? '⌘ ⇧ O' : notSupported],
   ];
   return (
     <Card>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>快捷键速查</div>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('settings.shortcuts.title')}</div>
       <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 6 }}>{desc}</div>
       {rows.map(([k, v]) => (
         <SettingRow key={k} label={k}>
@@ -481,6 +496,7 @@ function ShortcutsSection() {
 }
 
 function PermissionsSection() {
+  const { t } = useTranslation();
   const [accessibility, setAccessibility] = useState<PermissionStatus | 'loading'>('loading');
   const [microphone, setMicrophone] = useState<PermissionStatus | 'loading'>('loading');
   const [hotkey, setHotkey] = useState<HotkeyStatus | null>(null);
@@ -528,40 +544,40 @@ function PermissionsSection() {
   };
 
   const desc = capability?.requiresAccessibilityPermission
-    ? 'OpenLess 需要以下系统权限才能正常工作。授权后通常需要完全退出 App 重启一次才生效。'
-    : 'OpenLess 需要麦克风可用，并依赖全局快捷键监听状态判断 native hook 是否正常工作。';
+    ? t('settings.permissions.descAcc')
+    : t('settings.permissions.descNoAcc');
 
   return (
     <Card>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>权限</div>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('settings.permissions.title')}</div>
       <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 6 }}>
         {desc}
       </div>
-      <SettingRow label="麦克风" desc="用于捕获你的语音输入。">
+      <SettingRow label={t('settings.permissions.micLabel')} desc={t('settings.permissions.micDesc')}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <PermissionPill status={microphone} />
           {microphone !== 'granted' && microphone !== 'notApplicable' && microphone !== 'loading' && (
             <Btn variant="ghost" size="sm" onClick={reRequestMicrophone}>
-              {microphone === 'denied' || microphone === 'restricted' ? '打开系统设置' : '授权'}
+              {microphone === 'denied' || microphone === 'restricted' ? t('settings.permissions.openSystem') : t('settings.permissions.grant')}
             </Btn>
           )}
         </div>
       </SettingRow>
       {capability?.requiresAccessibilityPermission && (
-        <SettingRow label="辅助功能" desc="用于监听全局快捷键并将识别结果写入光标位置。">
+        <SettingRow label={t('settings.permissions.accLabel')} desc={t('settings.permissions.accDesc')}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <PermissionPill status={accessibility} />
             {accessibility !== 'granted' && accessibility !== 'notApplicable' && (
               <Btn variant="ghost" size="sm" onClick={reRequestAccessibility}>
-                授权
+                {t('settings.permissions.grant')}
               </Btn>
             )}
           </div>
         </SettingRow>
       )}
       <SettingRow
-        label="全局快捷键"
-        desc={capability ? `当前适配器：${adapterDisplayName(capability.adapter)}。用于判断快捷键监听是否已经安装。` : '用于判断快捷键监听是否已经安装。'}
+        label={t('settings.permissions.hotkeyLabel')}
+        desc={capability ? t('settings.permissions.hotkeyDescWithAdapter', { adapter: adapterDisplayName(capability.adapter) }) : t('settings.permissions.hotkeyDescPlain')}
       >
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
           <HotkeyStatusPill status={hotkey} />
@@ -572,30 +588,63 @@ function PermissionsSection() {
           )}
         </div>
       </SettingRow>
-      <SettingRow label="网络" desc="云端 ASR / LLM 调用所必需。本地模式可关闭。">
-        <Pill tone="ok"><Icon name="check" size={11} />可用</Pill>
+      <SettingRow label={t('settings.permissions.networkLabel')} desc={t('settings.permissions.networkDesc')}>
+        <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.networkOk')}</Pill>
       </SettingRow>
     </Card>
   );
 }
 
 function PermissionPill({ status }: { status: PermissionStatus | 'loading' }) {
+  const { t } = useTranslation();
   if (status === 'loading') {
-    return <Pill tone="default">检查中…</Pill>;
+    return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
   }
   if (status === 'granted') {
-    return <Pill tone="ok"><Icon name="check" size={11} />已授权</Pill>;
+    return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.granted')}</Pill>;
   }
   if (status === 'notApplicable') {
-    return <Pill tone="default">无需授权</Pill>;
+    return <Pill tone="default">{t('settings.permissions.notApplicable')}</Pill>;
   }
   if (status === 'denied' || status === 'restricted') {
-    return <Pill tone="outline">未授权</Pill>;
+    return <Pill tone="outline">{t('settings.permissions.denied')}</Pill>;
   }
-  return <Pill tone="outline">未确定</Pill>;
+  return <Pill tone="outline">{t('settings.permissions.indeterminate')}</Pill>;
+}
+
+function LanguageSection() {
+  const { t } = useTranslation();
+  const [pref, setPref] = useState<SupportedLocale | typeof FOLLOW_SYSTEM>(getLocalePreference());
+
+  const apply = async (next: SupportedLocale | typeof FOLLOW_SYSTEM) => {
+    setPref(next);
+    await setLocalePreference(next);
+  };
+
+  return (
+    <Card>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('settings.language.title')}</div>
+      <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 6 }}>{t('settings.language.desc')}</div>
+      <SettingRow label={t('settings.language.label')} desc={t('settings.language.labelDesc')}>
+        <select
+          value={pref}
+          onChange={e => apply(e.target.value as SupportedLocale | typeof FOLLOW_SYSTEM)}
+          style={{ ...inputStyle, maxWidth: 220 }}
+        >
+          <option value={FOLLOW_SYSTEM}>{t('settings.language.followSystem')}</option>
+          <option value="zh-CN">{t('settings.language.zh')}</option>
+          <option value="en">{t('settings.language.en')}</option>
+        </select>
+      </SettingRow>
+      <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 8, lineHeight: 1.6 }}>
+        {t('settings.language.restartHint')}
+      </div>
+    </Card>
+  );
 }
 
 function AboutSection() {
+  const { t } = useTranslation();
   const [qqCopied, setQqCopied] = useState(false);
 
   const copyQq = () => {
@@ -617,14 +666,14 @@ function AboutSection() {
         >OL</div>
         <div>
           <div style={{ fontSize: 16, fontWeight: 600 }}>OpenLess</div>
-          <div style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>自然说话，完美书写 · {APP_VERSION_LABEL}</div>
+          <div style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>{t('settings.about.tagline')} · {APP_VERSION_LABEL}</div>
         </div>
       </div>
-      <SettingRow label="检查更新"><Btn variant="ghost" size="sm" onClick={() => openExternal('https://github.com/appergb/openless/releases')}>打开 Releases</Btn></SettingRow>
-      <SettingRow label="源码"><Btn variant="ghost" size="sm" icon="link" onClick={() => openExternal('https://github.com/appergb/openless')}>GitHub</Btn></SettingRow>
-      <SettingRow label="文档"><Btn variant="ghost" size="sm" icon="link" onClick={() => openExternal('https://github.com/appergb/openless#readme')}>README</Btn></SettingRow>
-      <SettingRow label="反馈"><Btn variant="ghost" size="sm" icon="link" onClick={() => openExternal('https://github.com/appergb/openless/issues')}>GitHub Issues</Btn></SettingRow>
-      <SettingRow label="社区 QQ 群" desc="使用 QQ 搜索群号加入，或扫码进群。">
+      <SettingRow label={t('settings.about.checkUpdate')}><Btn variant="ghost" size="sm" onClick={() => openExternal('https://github.com/appergb/openless/releases')}>{t('settings.about.openReleases')}</Btn></SettingRow>
+      <SettingRow label={t('settings.about.source')}><Btn variant="ghost" size="sm" icon="link" onClick={() => openExternal('https://github.com/appergb/openless')}>GitHub</Btn></SettingRow>
+      <SettingRow label={t('settings.about.docs')}><Btn variant="ghost" size="sm" icon="link" onClick={() => openExternal('https://github.com/appergb/openless#readme')}>README</Btn></SettingRow>
+      <SettingRow label={t('settings.about.feedback')}><Btn variant="ghost" size="sm" icon="link" onClick={() => openExternal('https://github.com/appergb/openless/issues')}>GitHub Issues</Btn></SettingRow>
+      <SettingRow label={t('settings.about.qq')} desc={t('settings.about.qqDesc')}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <kbd style={{
             padding: '4px 10px', fontSize: 12, fontFamily: 'var(--ol-font-mono)',
@@ -633,34 +682,35 @@ function AboutSection() {
             boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
             color: 'var(--ol-ink-2)',
           }}>1078960553</kbd>
-          <button onClick={copyQq} title="复制群号" style={iconBtnStyle}>
+          <button onClick={copyQq} title={t('settings.about.copyQq')} style={iconBtnStyle}>
             <Icon name="copy" size={14} />
           </button>
-          {qqCopied && <span style={{ fontSize: 11, color: 'var(--ol-ok)', whiteSpace: 'nowrap' }}>已复制</span>}
+          {qqCopied && <span style={{ fontSize: 11, color: 'var(--ol-ok)', whiteSpace: 'nowrap' }}>{t('common.copied')}</span>}
         </div>
       </SettingRow>
-      <SettingRow label="隐私" desc="所有识别结果仅保存在本机。云端 API 仅用于实时转写与润色，不会保留你的录音。">
-        <Pill tone="default">本地优先</Pill>
+      <SettingRow label={t('settings.about.privacy')} desc={t('settings.about.privacyDesc')}>
+        <Pill tone="default">{t('settings.about.localFirst')}</Pill>
       </SettingRow>
     </Card>
   );
 }
 
 function HotkeyStatusPill({ status }: { status: HotkeyStatus | null }) {
+  const { t } = useTranslation();
   if (!status) {
-    return <Pill tone="default">检查中…</Pill>;
+    return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
   }
   if (status.state === 'installed') {
-    return <Pill tone="ok"><Icon name="check" size={11} />已安装</Pill>;
+    return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.hotkeyInstalled')}</Pill>;
   }
   if (status.state === 'starting') {
-    return <Pill tone="default">安装中…</Pill>;
+    return <Pill tone="default">{t('settings.permissions.hotkeyStarting')}</Pill>;
   }
-  return <Pill tone="outline">监听失败</Pill>;
+  return <Pill tone="outline">{t('settings.permissions.hotkeyFailed')}</Pill>;
 }
 
 function adapterDisplayName(adapter: HotkeyCapability['adapter'] | HotkeyStatus['adapter']) {
-  if (adapter === 'macEventTap') return 'macOS Event Tap';
-  if (adapter === 'windowsLowLevel') return 'Windows 低层键盘 hook';
-  return 'rdev 监听器';
+  if (adapter === 'macEventTap') return i18n.t('hotkey.adapter.macEventTap');
+  if (adapter === 'windowsLowLevel') return i18n.t('hotkey.adapter.windowsLowLevel');
+  return i18n.t('hotkey.adapter.rdev');
 }

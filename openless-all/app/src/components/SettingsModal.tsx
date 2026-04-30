@@ -3,13 +3,19 @@
 // (plus its AccountSection / PersonalizeSection / AboutMini siblings).
 
 import { useEffect, useState, type CSSProperties } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import { Settings as SettingsContent, type SettingsSectionId } from '../pages/Settings';
 import { Row } from './ui/Row';
 import { SegSimple } from './ui/SegSimple';
 import { SwitchLite } from './ui/SwitchLite';
-import { SelectLite } from './ui/SelectLite';
+import {
+  FOLLOW_SYSTEM,
+  getLocalePreference,
+  setLocalePreference,
+  type SupportedLocale,
+} from '../i18n';
 import type { OS } from './WindowChrome';
 
 interface SettingsModalProps {
@@ -18,7 +24,8 @@ interface SettingsModalProps {
   initialSettingsSection?: SettingsSectionId;
 }
 
-type ModalSectionId = '账户' | '设置' | '个性化' | '关于';
+// 稳定 ID（与 i18n key 一致，方便 modal.sections.* 渲染）。
+type ModalSectionId = 'account' | 'settings' | 'personalize' | 'about';
 
 interface ModalNavItem {
   id: string;
@@ -31,10 +38,11 @@ interface ModalGroup {
 }
 
 export function SettingsModal({ os: _os, onClose, initialSettingsSection }: SettingsModalProps) {
-  const [section, setSection] = useState<ModalSectionId>('设置');
+  const { t } = useTranslation();
+  const [section, setSection] = useState<ModalSectionId>('settings');
   const groups: ModalGroup[] = [
-    { items: [{ id: '账户', icon: 'user' }, { id: '设置', icon: 'settings' }, { id: '个性化', icon: 'sparkle' }, { id: '关于', icon: 'info' }] },
-    { items: [{ id: '帮助中心', icon: 'help', external: true }, { id: '版本说明', icon: 'doc', external: true }] },
+    { items: [{ id: 'account', icon: 'user' }, { id: 'settings', icon: 'settings' }, { id: 'personalize', icon: 'sparkle' }, { id: 'about', icon: 'info' }] },
+    { items: [{ id: 'helpCenter', icon: 'help', external: true }, { id: 'releaseNotes', icon: 'doc', external: true }] },
   ];
 
   return (
@@ -94,7 +102,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
                     }}>
 
                     <Icon name={it.icon} size={14} />
-                    <span style={{ flex: 1 }}>{it.id}</span>
+                    <span style={{ flex: 1 }}>{t(`modal.sections.${it.id}`)}</span>
                     {it.external && <Icon name="external" size={11} />}
                   </button>
                 );
@@ -114,17 +122,17 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
               cursor: 'default',
             }}
-            title="关闭">
+            title={t('common.close')}>
 
             <Icon name="close" size={14} />
           </button>
 
-          <h2 style={{ margin: '0 0 18px', fontSize: 22, fontWeight: 600, letterSpacing: '-0.02em' }}>{section}</h2>
+          <h2 style={{ margin: '0 0 18px', fontSize: 22, fontWeight: 600, letterSpacing: '-0.02em' }}>{t(`modal.sections.${section}`)}</h2>
 
-          {section === '设置' && <SettingsContent embedded initialSection={initialSettingsSection} />}
-          {section === '账户' && <AccountSection />}
-          {section === '个性化' && <PersonalizeSection />}
-          {section === '关于' && <AboutMini />}
+          {section === 'settings' && <SettingsContent embedded initialSection={initialSettingsSection} />}
+          {section === 'account' && <AccountSection />}
+          {section === 'personalize' && <PersonalizeSection />}
+          {section === 'about' && <AboutMini />}
         </div>
       </div>
 
@@ -140,6 +148,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
 }
 
 function AccountSection() {
+  const { t } = useTranslation();
   return (
     <div>
       <div style={{
@@ -154,23 +163,24 @@ function AccountSection() {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>L</div>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>本地用户</div>
-          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 2 }}>未登录 · 所有数据保存在本机</div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>{t('modal.account.localUser')}</div>
+          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 2 }}>{t('modal.account.localUserDesc')}</div>
         </div>
         <button style={{
           padding: '7px 14px', fontSize: 12.5, fontWeight: 500,
           borderRadius: 8, border: 0, background: 'var(--ol-ink)', color: '#fff',
           cursor: 'default', fontFamily: 'inherit',
-        }}>登录 / 同步</button>
+        }}>{t('modal.account.loginSync')}</button>
       </div>
       <p style={{ margin: '20px 0 0', fontSize: 12, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
-        OpenLess 默认完全本地运行。登录后可在多设备间同步词汇表与风格预设，识别仍在本机或你配置的 Provider 上完成。
+        {t('modal.account.footer')}
       </p>
     </div>
   );
 }
 
 function PersonalizeSection() {
+  const { t } = useTranslation();
   // 玻璃强度持久化到 localStorage，并实时写入 CSS var --ol-glass-blur。
   // 这是 CSS-only 的层（影响 backdrop-filter 的内层强度）；macOS NSVisualEffectView
   // 是另一层，由 Tauri 在窗口创建时一次性配置，运行时改动需要重启 App。
@@ -186,13 +196,16 @@ function PersonalizeSection() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <Row label="外观" desc="跟随系统 / 浅色 / 深色">
-        <SegSimple options={['跟随系统', '浅色', '深色']} active="跟随系统" />
+      <Row label={t('modal.personalize.appearance')} desc={t('modal.personalize.appearanceDesc')}>
+        <SegSimple
+          options={[t('modal.personalize.appearanceSystem'), t('modal.personalize.appearanceLight'), t('modal.personalize.appearanceDark')]}
+          active={t('modal.personalize.appearanceSystem')}
+        />
       </Row>
-      <Row label="界面语言">
-        <SelectLite value="简体中文（中国大陆）" />
+      <Row label={t('modal.personalize.language')}>
+        <LanguagePicker />
       </Row>
-      <Row label="毛玻璃强度" desc="影响窗口内层 backdrop-filter 强度（macOS 系统磨砂层无法运行时调）。">
+      <Row label={t('modal.personalize.blur')} desc={t('modal.personalize.blurDesc')}>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
           <input
             type="range"
@@ -207,10 +220,13 @@ function PersonalizeSection() {
           </span>
         </div>
       </Row>
-      <Row label="启动时打开">
-        <SegSimple options={['概览', '上次位置']} active="上次位置" />
+      <Row label={t('modal.personalize.startupOpen')}>
+        <SegSimple
+          options={[t('modal.personalize.startupOverview'), t('modal.personalize.startupLast')]}
+          active={t('modal.personalize.startupLast')}
+        />
       </Row>
-      <Row label="开机自启">
+      <Row label={t('modal.personalize.startupAtBoot')}>
         <SwitchLite on />
       </Row>
     </div>
@@ -218,20 +234,21 @@ function PersonalizeSection() {
 }
 
 function AboutMini() {
+  const { t } = useTranslation();
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16 }}>
         <img src="AppIcon.png" alt="" style={{ width: 56, height: 56, borderRadius: 13, boxShadow: '0 4px 10px rgba(0,0,0,.10), 0 0 0 0.5px rgba(0,0,0,.06)' }} />
         <div>
           <div style={{ fontSize: 17, fontWeight: 600 }}>OpenLess</div>
-          <div style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>自然说话，完美书写 · {APP_VERSION_LABEL}</div>
+          <div style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>{t('modal.about.tagline')} · {APP_VERSION_LABEL}</div>
         </div>
       </div>
-      <Row label="检查更新"><button style={btnGhost}>检查</button></Row>
-      <Row label="文档"><button style={btnGhost}>openless.app/docs ↗</button></Row>
-      <Row label="反馈渠道"><button style={btnGhost}>GitHub Issues ↗</button></Row>
-      <Row label="隐私" desc="所有识别结果只保存在本机，云端 API 仅用于实时调用。">
-        <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 999, background: 'var(--ol-blue-soft)', color: 'var(--ol-blue)', fontWeight: 500 }}>本地优先</span>
+      <Row label={t('modal.about.checkUpdate')}><button style={btnGhost}>{t('modal.about.checkUpdateBtn')}</button></Row>
+      <Row label={t('modal.about.docs')}><button style={btnGhost}>{t('modal.about.docsBtn')}</button></Row>
+      <Row label={t('modal.about.feedback')}><button style={btnGhost}>{t('modal.about.feedbackBtn')}</button></Row>
+      <Row label={t('modal.about.privacy')} desc={t('modal.about.privacyDesc')}>
+        <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 999, background: 'var(--ol-blue-soft)', color: 'var(--ol-blue)', fontWeight: 500 }}>{t('modal.about.localFirst')}</span>
       </Row>
     </div>
   );
@@ -243,3 +260,33 @@ const btnGhost: CSSProperties = {
   background: '#fff', color: 'var(--ol-ink-2)',
   cursor: 'default', fontFamily: 'inherit',
 };
+
+// 真正可用的语言切换器 —— 用原生 <select>，与 Settings → Language 分区共享同一份 localStorage 偏好。
+function LanguagePicker() {
+  const { t } = useTranslation();
+  const [pref, setPref] = useState<SupportedLocale | typeof FOLLOW_SYSTEM>(getLocalePreference());
+
+  const apply = async (next: SupportedLocale | typeof FOLLOW_SYSTEM) => {
+    setPref(next);
+    await setLocalePreference(next);
+  };
+
+  return (
+    <select
+      value={pref}
+      onChange={e => apply(e.target.value as SupportedLocale | typeof FOLLOW_SYSTEM)}
+      style={{
+        height: 32, padding: '0 10px',
+        border: '0.5px solid var(--ol-line-strong)',
+        borderRadius: 8, fontSize: 12.5,
+        fontFamily: 'inherit', outline: 'none',
+        background: 'var(--ol-surface-2)',
+        minWidth: 200, cursor: 'default',
+      }}
+    >
+      <option value={FOLLOW_SYSTEM}>{t('settings.language.followSystem')}</option>
+      <option value="zh-CN">{t('settings.language.zh')}</option>
+      <option value="en">{t('settings.language.en')}</option>
+    </select>
+  );
+}

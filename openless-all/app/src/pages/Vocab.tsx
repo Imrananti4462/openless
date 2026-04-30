@@ -2,11 +2,13 @@
 // 数据落地到 ~/Library/Application Support/OpenLess/dictionary.json（与 Swift 同名）。
 
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { addVocab, listVocab, removeVocab, setVocabEnabled } from '../lib/ipc';
 import type { DictionaryEntry } from '../lib/types';
 import { Btn, Card, PageHeader } from './_atoms';
 
 export function Vocab() {
+  const { t } = useTranslation();
   const [entries, setEntries] = useState<DictionaryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -59,12 +61,12 @@ export function Vocab() {
   return (
     <>
       <PageHeader
-        kicker="VOCABULARY"
-        title="词汇表"
-        desc="告诉模型识别前可能出现的词——生词、新词或专业词汇。同时进入 ASR 热词与后期模型上下文。"
+        kicker={t('vocab.kicker')}
+        title={t('vocab.title')}
+        desc={t('vocab.desc')}
         right={
           <div style={{ display: 'flex', gap: 8 }}>
-            <Btn icon="refresh" variant="ghost" size="sm" onClick={refresh}>刷新</Btn>
+            <Btn icon="refresh" variant="ghost" size="sm" onClick={refresh}>{t('common.refresh')}</Btn>
           </div>
         }
       />
@@ -73,7 +75,7 @@ export function Vocab() {
           <div style={{ display: 'flex', gap: 8 }}>
             <input
               ref={inputRef}
-              placeholder="输入词语，按 Enter 或点添加…"
+              placeholder={t('vocab.placeholder')}
               onKeyDown={onKeyDown}
               style={{
                 flex: 1, height: 36, padding: '0 12px',
@@ -83,22 +85,22 @@ export function Vocab() {
                 background: 'var(--ol-surface-2)',
               }}
             />
-            <Btn variant="primary" icon="plus" onClick={onAdd}>添加</Btn>
+            <Btn variant="primary" icon="plus" onClick={onAdd}>{t('common.add')}</Btn>
           </div>
           <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 10 }}>
-            支持中英混合 · 数字开头按字面识别 · 命中次数自动计数
+            {t('vocab.tip')}
           </div>
         </div>
         <div style={{ padding: 18, display: 'flex', flexWrap: 'wrap', gap: 8, minHeight: 80 }}>
-          {loading && <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>加载中…</div>}
+          {loading && <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>}
           {!loading && error && (
             <div style={{ fontSize: 12, color: 'var(--ol-err)', lineHeight: 1.6 }}>
-              加载失败:{error}
+              {t('vocab.loadFailed', { err: error })}
             </div>
           )}
           {!loading && !error && entries.length === 0 && (
             <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>
-              还没有词条。在上面输入一个生词或专业术语，让模型在听写时优先匹配。
+              {t('vocab.empty')}
             </div>
           )}
           {!error && entries.map(e => (
@@ -117,6 +119,7 @@ interface VocabChipProps {
 }
 
 function VocabChip({ entry, onRemove, onToggle }: VocabChipProps) {
+  const { t } = useTranslation();
   const enabled = entry.enabled;
   return (
     <span
@@ -133,7 +136,7 @@ function VocabChip({ entry, onRemove, onToggle }: VocabChipProps) {
     >
       <button
         onClick={onToggle}
-        title={enabled ? '点击禁用此词条' : '点击启用此词条'}
+        title={enabled ? t('vocab.tipDisabled') : t('vocab.tipEnabled')}
         style={{ background: 'transparent', border: 0, padding: 0, color: 'inherit', fontFamily: 'inherit', cursor: 'default' }}
       >
         {entry.phrase}
@@ -150,7 +153,7 @@ function VocabChip({ entry, onRemove, onToggle }: VocabChipProps) {
       >{entry.hits}</span>
       <button
         onClick={onRemove}
-        aria-label="删除"
+        aria-label={t('vocab.removeAria')}
         style={{
           width: 14, height: 14, padding: 0, border: 0, borderRadius: 999,
           background: 'transparent', color: 'var(--ol-ink-4)',

@@ -1,6 +1,7 @@
 // Overview.tsx — 真实指标，从 listHistory + getCredentials 派生。
 
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import { getHotkeyTriggerLabel } from '../lib/hotkey';
 import { getCredentials, listHistory } from '../lib/ipc';
@@ -8,18 +9,23 @@ import type { CredentialsStatus, DictationSession, PolishMode } from '../lib/typ
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 
-const MODE_LABEL: Record<PolishMode, string> = {
-  raw: '原文',
-  light: '轻度润色',
-  structured: '清晰结构',
-  formal: '正式表达',
-};
+function useModeLabels(): Record<PolishMode, string> {
+  const { t } = useTranslation();
+  return {
+    raw: t('style.modes.raw.name'),
+    light: t('style.modes.light.name'),
+    structured: t('style.modes.structured.name'),
+    formal: t('style.modes.formal.name'),
+  };
+}
 
 interface OverviewProps {
   onOpenHistory?: () => void;
 }
 
 export function Overview({ onOpenHistory }: OverviewProps) {
+  const { t } = useTranslation();
+  const modeLabel = useModeLabels();
   const [history, setHistory] = useState<DictationSession[]>([]);
   const [creds, setCreds] = useState<CredentialsStatus>({
     volcengineConfigured: false,
@@ -61,9 +67,9 @@ export function Overview({ onOpenHistory }: OverviewProps) {
   return (
     <>
       <PageHeader
-        kicker="DASHBOARD"
-        title="今日概览"
-        desc="本地说出，本地落字。下面是你今日的口述节奏与系统状态。"
+        kicker={t('overview.kicker')}
+        title={t('overview.title')}
+        desc={t('overview.desc')}
         right={
           <div
             style={{
@@ -77,65 +83,65 @@ export function Overview({ onOpenHistory }: OverviewProps) {
             }}
           >
             <Icon name="cmd" size={12} />
-            按
+            {t('overview.pressPrefix')}
             <kbd style={{
               padding: '2px 7px', fontSize: 11, fontFamily: 'var(--ol-font-mono)',
               background: '#fff', borderRadius: 5,
               border: '0.5px solid var(--ol-line-strong)',
               color: 'var(--ol-ink)',
             }}>{getHotkeyTriggerLabel(hotkey?.trigger)}</kbd>
-            开始录音
+            {t('overview.pressSuffix')}
           </div>
         }
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 18 }}>
         <ProviderCard
-          kind="ASR 语音"
-          name="火山引擎"
-          subname="bigmodel"
+          kind={t('overview.asrKind')}
+          name={t('overview.asrName')}
+          subname={t('overview.asrSubname')}
           configured={creds.volcengineConfigured}
         />
         <ProviderCard
-          kind="LLM 模型"
-          name="OpenAI 兼容"
-          subname={creds.arkConfigured ? '已配置 active LLM' : '未配置'}
+          kind={t('overview.llmKind')}
+          name={t('overview.llmName')}
+          subname={creds.arkConfigured ? t('overview.llmConfigured') : t('overview.llmNotConfigured')}
           configured={creds.arkConfigured}
         />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
-        <Metric icon="hash" label="今日字数" value={metrics.charsToday.toLocaleString()} trend={`${metrics.segmentsToday} 段`} />
-        <Metric icon="mic" label="今日总时长" value={formatDuration(metrics.totalDurationMs)} trend="" />
-        <Metric icon="clock" label="平均段落" value={formatDuration(metrics.avgLatencyMs)} trend={metrics.segmentsToday > 0 ? '今日均值' : '暂无数据'} />
-        <Metric icon="bolt" label="累计记录" value={String(history.length)} trend="本机存档 (上限 200)" accent />
+        <Metric icon="hash" label={t('overview.metricChars')} value={metrics.charsToday.toLocaleString()} trend={t('overview.metricSegments', { count: metrics.segmentsToday })} />
+        <Metric icon="mic" label={t('overview.metricDuration')} value={formatDuration(metrics.totalDurationMs)} trend="" />
+        <Metric icon="clock" label={t('overview.metricAvg')} value={formatDuration(metrics.avgLatencyMs)} trend={metrics.segmentsToday > 0 ? t('overview.metricAvgTrend') : t('overview.metricNoData')} />
+        <Metric icon="bolt" label={t('overview.metricTotal')} value={String(history.length)} trend={t('overview.metricTotalTrend')} accent />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 12 }}>
         <Card padding={18}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-2)' }}>近 7 天</span>
-            <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>条数 / 天</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-2)' }}>{t('overview.weekTitle')}</span>
+            <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>{t('overview.weekUnit')}</span>
           </div>
           <WeekChart data={weekly} />
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--ol-ink-4)', marginTop: 8 }}>
-            {weekDayLabels().map((d, i) => <span key={i}>{d}</span>)}
+            {weekDayLabels(t('overview.weekDays', { returnObjects: true }) as string[]).map((d, i) => <span key={i}>{d}</span>)}
           </div>
         </Card>
 
         <Card padding={0}>
           <div style={{ padding: '14px 18px', borderBottom: '0.5px solid var(--ol-line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-2)' }}>最近识别</span>
-            <Btn size="sm" variant="ghost" onClick={onOpenHistory}>全部记录 →</Btn>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-2)' }}>{t('overview.recentTitle')}</span>
+            <Btn size="sm" variant="ghost" onClick={onOpenHistory}>{t('overview.recentAll')}</Btn>
           </div>
           <div>
             {history.length === 0 && (
               <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--ol-ink-4)' }}>
-                还没有记录。按 {getHotkeyTriggerLabel(hotkey?.trigger)} 开始第一次录音。
+                {t('overview.recentEmpty', { trigger: getHotkeyTriggerLabel(hotkey?.trigger) })}
               </div>
             )}
             {history.slice(0, 5).map(s => (
-              <RecentRow key={s.id} session={s} />
+              <RecentRow key={s.id} session={s} modeLabel={modeLabel} />
             ))}
           </div>
         </Card>
@@ -152,6 +158,9 @@ interface ProviderCardProps {
 }
 
 function ProviderCard({ kind, name, subname, configured }: ProviderCardProps) {
+  const { t } = useTranslation();
+  // ASR 卡用 mic 图标，其他用 sparkle —— 通过比较译文判断会随语言改变，故改用本地化无关的字面量比较。
+  const isAsr = kind === t('overview.asrKind');
   return (
     <Card padding={16} style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
       <div
@@ -162,7 +171,7 @@ function ProviderCard({ kind, name, subname, configured }: ProviderCardProps) {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}
       >
-        <Icon name={kind.startsWith('ASR') ? 'mic' : 'sparkle'} size={18} />
+        <Icon name={isAsr ? 'mic' : 'sparkle'} size={18} />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
@@ -170,10 +179,10 @@ function ProviderCard({ kind, name, subname, configured }: ProviderCardProps) {
           {configured ? (
             <Pill tone="ok" size="sm">
               <span style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--ol-ok)' }} />
-              已配置
+              {t('overview.statusConfigured')}
             </Pill>
           ) : (
-            <Pill tone="outline" size="sm">未配置</Pill>
+            <Pill tone="outline" size="sm">{t('overview.statusNotConfigured')}</Pill>
           )}
         </div>
         <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>{name}</div>
@@ -230,14 +239,14 @@ function WeekChart({ data }: { data: number[] }) {
   );
 }
 
-function RecentRow({ session }: { session: DictationSession }) {
+function RecentRow({ session, modeLabel }: { session: DictationSession; modeLabel: Record<PolishMode, string> }) {
   return (
     <div style={{ padding: '12px 18px', borderBottom: '0.5px solid var(--ol-line-soft)', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4, minWidth: 60 }}>
         <span style={{ fontSize: 11, fontFamily: 'var(--ol-font-mono)', color: 'var(--ol-ink-3)' }}>
           {formatTime(session.createdAt)}
         </span>
-        <Pill size="sm" tone="default">{MODE_LABEL[session.mode]}</Pill>
+        <Pill size="sm" tone="default">{modeLabel[session.mode]}</Pill>
       </div>
       <div style={{ flex: 1, fontSize: 12.5, color: 'var(--ol-ink-2)', whiteSpace: 'pre-line', lineHeight: 1.55, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
         {session.finalText.split('\n')[0]}
@@ -266,8 +275,7 @@ function formatDuration(ms: number): string {
   return `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 }
 
-function weekDayLabels(): string[] {
-  const names = ['日', '一', '二', '三', '四', '五', '六'];
+function weekDayLabels(names: string[]): string[] {
   const today = new Date().getDay();
   const out: string[] = [];
   for (let i = 6; i >= 0; i--) {

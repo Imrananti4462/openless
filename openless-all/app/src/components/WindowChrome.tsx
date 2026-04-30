@@ -12,6 +12,7 @@
 //   └───────────────────────────────────────────────┘
 
 import { type CSSProperties, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 
 export type OS = 'mac' | 'win';
 
@@ -81,6 +82,7 @@ interface WinTitleBarProps {
 }
 
 function WinTitleBar({ title }: WinTitleBarProps) {
+  const { t } = useTranslation();
   return (
     <div
       style={{
@@ -100,13 +102,13 @@ function WinTitleBar({ title }: WinTitleBarProps) {
         <span style={{ fontSize: 12, color: 'var(--ol-ink-3)', fontWeight: 500 }}>{title}</span>
       </div>
       <div style={{ display: 'flex' }}>
-        <button style={winBtnStyle} title="最小化" onClick={() => runWindowsWindowAction('minimize')}>
+        <button style={winBtnStyle} title={t('windowChrome.minimize')} onClick={() => runWindowsWindowAction('minimize')}>
           <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" strokeWidth="1" /></svg>
         </button>
-        <button style={winBtnStyle} title="最大化" onClick={() => runWindowsWindowAction('toggleMaximize')}>
+        <button style={winBtnStyle} title={t('windowChrome.maximize')} onClick={() => runWindowsWindowAction('toggleMaximize')}>
           <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" stroke="currentColor" strokeWidth="1" fill="none" /></svg>
         </button>
-        <button style={winCloseBtnStyle} title="关闭" onClick={() => runWindowsWindowAction('close')}>
+        <button style={winCloseBtnStyle} title={t('windowChrome.close')} onClick={() => runWindowsWindowAction('close')}>
           <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0L10 10M10 0L0 10" stroke="currentColor" strokeWidth="1" /></svg>
         </button>
       </div>
