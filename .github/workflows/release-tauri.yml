@@ -319,7 +319,9 @@ jobs:
           name: 'OpenLess ${{ github.ref_name }}'
           draft: false
           prerelease: false
-          generate_release_notes: true
+          # Matrix jobs all upload assets to the same release. Generate notes once
+          # so macOS, Windows, and Linux jobs do not duplicate the release body.
+          generate_release_notes: ${{ matrix.platform == 'macos-latest' }}
           files: |
             openless-all/app/src-tauri/target/release/bundle/dmg/*.dmg
             openless-all/app/src-tauri/target/release/bundle/macos/*.app.tar.gz
