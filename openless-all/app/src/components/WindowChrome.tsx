@@ -24,6 +24,9 @@ export function detectOS(): OS {
   return 'mac';
 }
 
+const MAC_TITLEBAR_HEIGHT = 36;
+const MAC_TRAFFIC_LIGHT_RESERVED_WIDTH = 76;
+
 interface WindowChromeProps {
   os?: OS;
   title?: string;
@@ -54,18 +57,17 @@ export function WindowChrome({ os = 'mac', title = 'OpenLess', children, height 
       }}
     >
       {os === 'win' && <WinTitleBar title={title} />}
-      {/* macOS：窗口装饰由系统画三色按钮（titleBarStyle: Overlay），
-          这里只放一条不可见的拖动条覆盖在按钮高度上方，让用户能从顶端拖动整个窗口。
-          注意 left 留出 80px 给系统的 close/min/max，否则鼠标按下落在按钮上无法触发 close。 */}
+      {/* macOS：窗口装饰由系统画三色按钮（titleBarStyle: Overlay + trafficLightPosition），
+          顶部拖动区按标准标题栏高度铺开，并避开系统按钮热区。 */}
       {os === 'mac' && (
         <div
           data-tauri-drag-region
           style={{
             position: 'absolute',
             top: 0,
-            left: 80,
+            left: MAC_TRAFFIC_LIGHT_RESERVED_WIDTH,
             right: 0,
-            height: 28,
+            height: MAC_TITLEBAR_HEIGHT,
             zIndex: 50,
           }}
         />
