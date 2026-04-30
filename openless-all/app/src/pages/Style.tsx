@@ -2,6 +2,7 @@
 // defaultMode 来自 prefs.defaultMode，启停从 prefs.enabledModes 反推。
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { getSettings, setDefaultPolishMode, setStyleEnabled, setSettings } from '../lib/ipc';
 import type { PolishMode, UserPreferences } from '../lib/types';
 import { PageHeader, Pill } from './_atoms';
@@ -13,34 +14,16 @@ interface StyleDef {
   sample: string;
 }
 
-const STYLES: StyleDef[] = [
-  {
-    id: 'raw',
-    name: '原文',
-    desc: '只补标点和必要分句，不改写不扩写。',
-    sample: '保留原始口语；嗯、那个等口癖会被去除，但不会重组语句。',
-  },
-  {
-    id: 'light',
-    name: '轻度润色',
-    desc: '去口癖、补标点，整理为可发送的自然文字。',
-    sample: '让转写听起来不像念稿——保留语气和表达习惯，但行文流畅。',
-  },
-  {
-    id: 'structured',
-    name: '清晰结构',
-    desc: '多个主题或步骤时，自动组织为分点列表。',
-    sample: '1. 主题一\n   1) 要点 a\n   2) 要点 b\n2. 主题二\n   1) 要点 c',
-  },
-  {
-    id: 'formal',
-    name: '正式表达',
-    desc: '工作沟通和邮件场景，更专业更完整。',
-    sample: '邮件场景自动识别问候 / 落款；不引入空泛客套。',
-  },
-];
+const STYLE_IDS: PolishMode[] = ['raw', 'light', 'structured', 'formal'];
 
 export function Style() {
+  const { t } = useTranslation();
+  const STYLES: StyleDef[] = STYLE_IDS.map(id => ({
+    id,
+    name: t(`style.modes.${id}.name`),
+    desc: t(`style.modes.${id}.desc`),
+    sample: t(`style.modes.${id}.sample`),
+  }));
   const [prefs, setPrefs] = useState<UserPreferences | null>(null);
 
   useEffect(() => {
@@ -66,9 +49,9 @@ export function Style() {
   if (!prefs) {
     return (
       <PageHeader
-        kicker="STYLE"
-        title="输出风格"
-        desc="加载中…"
+        kicker={t('style.kicker')}
+        title={t('style.title')}
+        desc={t('common.loading')}
       />
     );
   }
@@ -92,12 +75,12 @@ export function Style() {
   return (
     <>
       <PageHeader
-        kicker="STYLE"
-        title="输出风格"
-        desc="选择默认风格用于全局录音。每张卡可单独启停；启停的风格不会出现在历史记录的「重新润色」切换中。"
+        kicker={t('style.kicker')}
+        title={t('style.title')}
+        desc={t('style.desc')}
         right={
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>整体启用</span>
+            <span style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>{t('style.masterToggle')}</span>
             <button
               onClick={onMasterToggle}
               style={{
@@ -137,7 +120,7 @@ export function Style() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                 <button
                   onClick={() => onPickDefault(s.id)}
-                  aria-label="设为默认"
+                  aria-label={t('style.ariaSetDefault')}
                   style={{
                     width: 16, height: 16, padding: 0, border: 0, borderRadius: 999,
                     background: isDefault ? 'var(--ol-blue)' : 'transparent',
@@ -160,7 +143,7 @@ export function Style() {
                 >
                   {s.name}
                 </button>
-                {isDefault && <Pill tone="blue" size="sm" style={{ marginLeft: 'auto' }}>当前默认</Pill>}
+                {isDefault && <Pill tone="blue" size="sm" style={{ marginLeft: 'auto' }}>{t('style.currentDefault')}</Pill>}
                 {!isDefault && (
                   <button
                     onClick={() => onToggleEnabled(s.id)}

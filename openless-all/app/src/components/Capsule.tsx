@@ -21,6 +21,7 @@
 // 控件可用性：仅 listening 时 cancel/confirm 才能点（与 Swift `isControlEnabled` 一致）。
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invokeOrMock, isTauri } from '../lib/ipc';
 import type { CapsulePayload, CapsuleState } from '../lib/types';
 
@@ -168,6 +169,7 @@ interface PillProps {
 }
 
 function Pill({ state, level, insertedChars, message, onCancel, onConfirm }: PillProps) {
+  const { t } = useTranslation();
   // 与 Swift `isControlEnabled` 同语义：只有 listening 时 cancel/confirm 才可点。
   const enabled = state === 'recording';
 
@@ -182,19 +184,19 @@ function Pill({ state, level, insertedChars, message, onCancel, onConfirm }: Pil
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, width: 84, justifyContent: 'center' }}>
           <ProcessingDots />
           <span style={{ fontSize: 10.5, fontWeight: 500, color: 'var(--ol-ink-2)' }}>
-            正在思考中
+            {t('capsule.thinking')}
           </span>
         </div>
       );
       break;
     case 'done':
-      center = <CenterText text={message || `已插入 ${insertedChars}`} />;
+      center = <CenterText text={message || t('capsule.inserted', { count: insertedChars })} />;
       break;
     case 'cancelled':
-      center = <CenterText text="已取消" />;
+      center = <CenterText text={t('capsule.cancelled')} />;
       break;
     case 'error':
-      center = <CenterText text={message || '出错了'} color="var(--ol-err)" />;
+      center = <CenterText text={message || t('capsule.error')} color="var(--ol-err)" />;
       break;
     default:
       center = <AudioBars level={0} />;

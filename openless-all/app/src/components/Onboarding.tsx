@@ -4,6 +4,7 @@
 // 与 Swift `Sources/OpenLessApp/Onboarding/` 同语义，但简化为单页三步。
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
@@ -20,6 +21,7 @@ interface OnboardingProps {
 }
 
 export function Onboarding({ onComplete }: OnboardingProps) {
+  const { t } = useTranslation();
   const [accessibility, setAccessibility] = useState<PermissionStatus>('notDetermined');
   const [microphone, setMicrophone] = useState<PermissionStatus>('notDetermined');
   const [busy, setBusy] = useState(false);
@@ -116,45 +118,45 @@ export function Onboarding({ onComplete }: OnboardingProps) {
             OL
           </div>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 600 }}>欢迎使用 OpenLess</div>
+            <div style={{ fontSize: 18, fontWeight: 600 }}>{t('onboarding.welcome')}</div>
             <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', marginTop: 2 }}>
-              本地说出，本地落字。开始前需要两个系统权限。
+              {t('onboarding.intro')}
             </div>
           </div>
         </div>
 
         <PermissionStep
           index={1}
-          title={capability?.requiresAccessibilityPermission ? '辅助功能' : '全局快捷键'}
+          title={capability?.requiresAccessibilityPermission ? t('onboarding.accessibilityTitle') : t('onboarding.hotkeyTitle')}
           desc={capability?.requiresAccessibilityPermission
-            ? `用于监听全局快捷键（默认 ${getHotkeyTriggerLabel(capability.availableTriggers[0])}）并把识别结果写入光标位置。`
-            : capability?.statusHint ?? '用于确认全局快捷键监听可用。'}
+            ? t('onboarding.accessibilityDesc', { trigger: getHotkeyTriggerLabel(capability.availableTriggers[0]) })
+            : capability?.statusHint ?? t('onboarding.hotkeyDesc')}
           status={accessibility}
           actionLabel={
             !capability?.requiresAccessibilityPermission || accessibility === 'notApplicable'
-              ? '无需授权'
+              ? t('onboarding.actionNotApplicable')
               : accessibility === 'granted'
-              ? '已授权'
+              ? t('onboarding.actionGranted')
               : accessibility === 'denied'
-                ? '打开系统设置'
-                : '授权'
+                ? t('onboarding.actionOpenSystem')
+                : t('onboarding.actionGrant')
           }
           onAction={onGrantAccessibility}
           disabled={busy || !capability?.requiresAccessibilityPermission || accessibility === 'granted' || accessibility === 'notApplicable'}
-          hint={capability?.requiresAccessibilityPermission ? '授权后必须**完全退出 OpenLess** 再重新打开（macOS TCC 规则）。' : undefined}
+          hint={capability?.requiresAccessibilityPermission ? t('onboarding.accessibilityHint') : undefined}
         />
 
         <PermissionStep
           index={2}
-          title="麦克风"
-          desc="用于捕获你的语音输入。"
+          title={t('onboarding.micTitle')}
+          desc={t('onboarding.micDesc')}
           status={microphone}
           actionLabel={
             microphone === 'granted'
-              ? '已授权'
+              ? t('onboarding.actionGranted')
               : microphone === 'denied'
-                ? '打开系统设置'
-                : '弹出授权'
+                ? t('onboarding.actionOpenSystem')
+                : t('onboarding.actionRequestMic')
           }
           onAction={onRequestMicrophone}
           disabled={busy || microphone === 'granted'}
@@ -171,7 +173,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
             lineHeight: 1.6,
           }}
         >
-          授权全部完成后此引导自动关闭。如果一直不消失，从菜单栏 OpenLess → 退出，重新打开 App。
+          {t('onboarding.footerHint')}
         </div>
       </div>
     </div>

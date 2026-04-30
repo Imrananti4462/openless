@@ -2,6 +2,7 @@
 // 真实数据来自 ~/Library/Application Support/OpenLess/history.json。
 
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import { detectOS } from '../components/WindowChrome';
 import { getHotkeyTriggerLabel } from '../lib/hotkey';
@@ -10,22 +11,31 @@ import type { DictationSession, PolishMode } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 
-const FILTERS: Array<{ id: 'all' | PolishMode; label: string }> = [
-  { id: 'all', label: '全部' },
-  { id: 'raw', label: '原文' },
-  { id: 'light', label: '轻度润色' },
-  { id: 'structured', label: '清晰结构' },
-  { id: 'formal', label: '正式表达' },
-];
+function useFilters(): Array<{ id: 'all' | PolishMode; label: string }> {
+  const { t } = useTranslation();
+  return [
+    { id: 'all', label: t('history.filterAll') },
+    { id: 'raw', label: t('style.modes.raw.name') },
+    { id: 'light', label: t('style.modes.light.name') },
+    { id: 'structured', label: t('style.modes.structured.name') },
+    { id: 'formal', label: t('style.modes.formal.name') },
+  ];
+}
 
-const MODE_LABEL: Record<PolishMode, string> = {
-  raw: '原文',
-  light: '轻度润色',
-  structured: '清晰结构',
-  formal: '正式表达',
-};
+function useModeLabel(): Record<PolishMode, string> {
+  const { t } = useTranslation();
+  return {
+    raw: t('style.modes.raw.name'),
+    light: t('style.modes.light.name'),
+    structured: t('style.modes.structured.name'),
+    formal: t('style.modes.formal.name'),
+  };
+}
 
 export function History() {
+  const { t } = useTranslation();
+  const FILTERS = useFilters();
+  const MODE_LABEL = useModeLabel();
   const [filter, setFilter] = useState<'all' | PolishMode>('all');
   const [items, setItems] = useState<DictationSession[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -56,7 +66,7 @@ export function History() {
 
   const onClear = async () => {
     if (items.length === 0) return;
-    if (!confirm(`确定清空全部 ${items.length} 条记录？此操作不可恢复。`)) return;
+    if (!confirm(t('history.confirmClear', { count: items.length }))) return;
     await clearHistory();
     setItems([]);
     setSelectedId(null);
@@ -76,13 +86,13 @@ export function History() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <PageHeader
-        kicker="HISTORY"
-        title="历史记录"
-        desc="最近的识别结果只保存在本机。左侧为时间线，右侧为原文与润色对比。"
+        kicker={t('history.kicker')}
+        title={t('history.title')}
+        desc={t('history.desc')}
         right={
           <div style={{ display: 'flex', gap: 8 }}>
-            <Btn icon="refresh" variant="ghost" size="sm" onClick={refresh}>刷新</Btn>
-            <Btn icon="trash" variant="ghost" size="sm" onClick={onClear}>清空</Btn>
+            <Btn icon="refresh" variant="ghost" size="sm" onClick={refresh}>{t('common.refresh')}</Btn>
+            <Btn icon="trash" variant="ghost" size="sm" onClick={onClear}>{t('common.clear')}</Btn>
           </div>
         }
       />
@@ -96,7 +106,7 @@ export function History() {
               background: 'var(--ol-surface-2)', color: 'var(--ol-ink-3)',
             }}>
               <Icon name="search" size={12} />
-              <span style={{ flex: 1 }}>共 {items.length} 条 · 显示 {filtered.length}</span>
+              <span style={{ flex: 1 }}>{t('history.summary', { total: items.length, shown: filtered.length })}</span>
             </div>
             <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 10 }}>
               {FILTERS.map(f => (
@@ -115,10 +125,10 @@ export function History() {
             </div>
           </div>
           <div style={{ flex: 1, overflow: 'auto', padding: 6 }}>
-            {loading && <div style={{ padding: 16, fontSize: 12, color: 'var(--ol-ink-4)' }}>加载中…</div>}
+            {loading && <div style={{ padding: 16, fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>}
             {!loading && filtered.length === 0 && (
               <div style={{ padding: 16, fontSize: 12, color: 'var(--ol-ink-4)' }}>
-                还没有历史记录。按 {getHotkeyTriggerLabel(hotkey?.trigger)} 录一段试试。
+                {t('history.empty', { trigger: getHotkeyTriggerLabel(hotkey?.trigger) })}
               </div>
             )}
             {filtered.map(s => (
@@ -161,15 +171,15 @@ export function History() {
                   <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>{formatDuration(item.durationMs)}</span>
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <Btn icon="copy" variant="ghost" size="sm" onClick={onCopy}>复制</Btn>
-                  <Btn icon="trash" variant="ghost" size="sm" onClick={onDelete}>删除</Btn>
+                  <Btn icon="copy" variant="ghost" size="sm" onClick={onCopy}>{t('common.copy')}</Btn>
+                  <Btn icon="trash" variant="ghost" size="sm" onClick={onDelete}>{t('common.delete')}</Btn>
                 </div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div style={{ padding: 14, border: '0.5px solid var(--ol-line)', borderRadius: 10, background: 'var(--ol-surface-2)' }}>
-                  <Pill size="sm" tone="outline" style={{ marginBottom: 10 }}>原文</Pill>
+                  <Pill size="sm" tone="outline" style={{ marginBottom: 10 }}>{t('history.rawLabel')}</Pill>
                   <p style={{ margin: 0, fontSize: 13, lineHeight: 1.7, color: 'var(--ol-ink-2)', whiteSpace: 'pre-wrap' }}>
-                    {item.rawTranscript || '（空）'}
+                    {item.rawTranscript || t('history.rawEmpty')}
                   </p>
                 </div>
                 <div style={{ padding: 14, border: '0.5px solid var(--ol-blue)', borderRadius: 10, background: 'var(--ol-blue-soft)' }}>
@@ -180,17 +190,23 @@ export function History() {
                 </div>
               </div>
               <div style={{ marginTop: 18, paddingTop: 14, borderTop: '0.5px solid var(--ol-line-soft)', display: 'flex', gap: 18, fontSize: 11, color: 'var(--ol-ink-4)', flexWrap: 'wrap' }}>
-                {item.appName && <span>插入到 <b style={{ color: 'var(--ol-ink-2)' }}>{item.appName}</b></span>}
-                <span>{item.finalText.length} 字</span>
+                {item.appName && <span>{t('history.insertedTo')} <b style={{ color: 'var(--ol-ink-2)' }}>{item.appName}</b></span>}
+                <span>{t('history.chars', { count: item.finalText.length })}</span>
                 {item.dictionaryEntryCount != null && item.dictionaryEntryCount > 0 && (
-                  <span>{item.dictionaryEntryCount} 个热词</span>
+                  <span>{t('history.vocabHits', { count: item.dictionaryEntryCount })}</span>
                 )}
-                <span>{item.insertStatus === 'inserted' ? '已插入' : item.insertStatus === 'copiedFallback' ? `已复制(需 ${detectOS() === 'win' ? 'Ctrl+V' : '⌘V'})` : '插入失败'}</span>
+                <span>{
+                  item.insertStatus === 'inserted'
+                    ? t('history.inserted')
+                    : item.insertStatus === 'copiedFallback'
+                      ? t('history.copiedFallback', { shortcut: detectOS() === 'win' ? 'Ctrl+V' : '⌘V' })
+                      : t('history.insertFailed')
+                }</span>
               </div>
             </>
           ) : (
             <div style={{ padding: 40, textAlign: 'center', fontSize: 13, color: 'var(--ol-ink-4)' }}>
-              {loading ? '加载中…' : '左侧选一条查看详情。'}
+              {loading ? t('common.loading') : t('history.selectHint')}
             </div>
           )}
         </Card>
