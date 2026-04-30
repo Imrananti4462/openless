@@ -336,6 +336,8 @@ function ProvidersSection() {
   );
 }
 
+type CredentialFieldStatus = 'idle' | 'saving' | 'saved' | 'readError' | 'saveError' | 'copied' | 'copyError';
+
 interface CredentialFieldProps {
   label: string;
   account: string;
@@ -351,14 +353,16 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
   const [revealed, setRevealed] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [dirty, setDirty] = useState(false);
-  const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'saveError' | 'copied' | 'copyError'>('idle');
+  const [status, setStatus] = useState<CredentialFieldStatus>('idle');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const statusRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoaded(false);
     setDirty(false);
     setStatus('idle');
+    setValue('');
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
@@ -373,7 +377,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
         if (cancelled) return;
         console.error('[settings] failed to read credential', account, error);
         setLoaded(true);
-        setStatus('saveError');
+        setStatus('readError');
       });
     return () => {
       cancelled = true;
@@ -383,26 +387,33 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
   useEffect(() => {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (statusRef.current) clearTimeout(statusRef.current);
     };
   }, []);
 
+  const showTemporaryStatus = (next: CredentialFieldStatus) => {
+    setStatus(next);
+    if (statusRef.current) clearTimeout(statusRef.current);
+    statusRef.current = window.setTimeout(() => setStatus('idle'), 1600);
+  };
+
   const save = async (v: string) => {
-    if (!loaded) return;
+    if (!loaded || !dirty) return;
     setStatus('saving');
     try {
       await setCredential(account, v);
       setDirty(false);
-      setStatus('saved');
+      showTemporaryStatus('saved');
     } catch (error) {
       console.error('[settings] failed to save credential', account, error);
-      setStatus('saveError');
+      showTemporaryStatus('saveError');
     }
-    window.setTimeout(() => setStatus('idle'), 1600);
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value;
     setValue(v);
+    if (!loaded) return;
     setDirty(true);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => save(v), 300);
@@ -425,21 +436,21 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
   };
 
   const onCopy = async () => {
-    if (!value) return;
+    if (!value || !loaded) return;
     try {
       if (!navigator.clipboard?.writeText) {
         throw new Error('Clipboard API unavailable');
       }
       await navigator.clipboard.writeText(value);
-      setStatus('copied');
+      showTemporaryStatus('copied');
     } catch (error) {
       console.error('[settings] failed to copy credential', account, error);
-      setStatus('copyError');
+      showTemporaryStatus('copyError');
     }
-    window.setTimeout(() => setStatus('idle'), 1600);
   };
 
   const inputType = mask && !revealed ? 'password' : 'text';
+  const disabled = !loaded;
 
   return (
     <SettingRow label={label}>
@@ -447,13 +458,13 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
         <input
           type={inputType}
           value={value}
-          placeholder={placeholder}
+          placeholder={loaded ? placeholder : t('common.loading')}
           onChange={handleChange}
           onBlur={onBlur}
-          disabled={!loaded}
+          disabled={disabled}
           style={{ ...inputStyle, fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
         />
-        {defaultValue && !value && (
+        {defaultValue && !value && loaded && (
           <button onClick={fillDefault} title={t('settings.providers.fillDefault')} style={iconBtnStyle} disabled={!loaded}>
             <Icon name="check" size={13} />
           </button>
@@ -463,6 +474,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
             onClick={() => setRevealed(r => !r)}
             title={revealed ? t('common.hide') : t('common.show')}
             style={iconBtnStyle}
+            disabled={disabled}
           >
             <Icon name="eye" size={14} />
           </button>
@@ -471,7 +483,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
           onClick={onCopy}
           title={t('common.copy')}
           style={iconBtnStyle}
-          disabled={!value}
+          disabled={!value || disabled}
         >
           <Icon name="copy" size={14} />
         </button>
@@ -484,12 +496,14 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
             }}
           >
             {status === 'saving'
-              ? '保存中'
+              ? t('common.saving')
               : status === 'saved'
                 ? t('common.saved')
                 : status === 'copied'
-                  ? '已复制'
-                  : '操作失败'}
+                  ? t('common.copied')
+                  : status === 'readError'
+                    ? t('settings.providers.readFailed')
+                    : t('common.operationFailed')}
           </span>
         )}
       </div>
