@@ -191,6 +191,26 @@ pub fn run() {
 
 #[tauri::command]
 fn restart_app(app: AppHandle) {
+    // macOS：自动更新会让新装的 .app 带 com.apple.quarantine（无论 Tauri updater
+    // 怎么解包，下载流由 LaunchServices 接管，输出物可能仍带 xattr）。如果不
+    // strip，重启后 Gatekeeper 会拦着说"OpenLess 已损坏 / 来自未识别开发者"，
+    // 用户必须自己开终端跑 xattr -cr 才能继续用 — 违反了"自动更新对用户应该零摩擦"。
+    //
+    // 在 restart 前阻塞地清一次 xattr。失败容忍（PATH 异常、xattr 不存在、磁盘
+    // 只读等边角情况），不让它阻塞重启本身。
+    #[cfg(target_os = "macos")]
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(bundle) = exe
+            .ancestors()
+            .find(|p| p.extension().map(|e| e == "app").unwrap_or(false))
+        {
+            let _ = std::process::Command::new("/usr/bin/xattr")
+                .arg("-cr")
+                .arg(bundle)
+                .status();
+            log::info!("[updater] stripped xattr on {:?} before restart", bundle);
+        }
+    }
     app.restart();
 }
 
