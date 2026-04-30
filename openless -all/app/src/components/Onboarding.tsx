@@ -11,8 +11,9 @@ import {
   requestAccessibilityPermission,
   requestMicrophonePermission,
 } from '../lib/ipc';
+import { getHotkeyTriggerLabel } from '../lib/hotkey';
 import type { PermissionStatus } from '../lib/types';
-import { detectOS } from './WindowChrome';
+import { useHotkeySettings } from '../state/HotkeySettingsContext';
 
 interface OnboardingProps {
   onComplete: () => void;
@@ -22,7 +23,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
   const [accessibility, setAccessibility] = useState<PermissionStatus>('notDetermined');
   const [microphone, setMicrophone] = useState<PermissionStatus>('notDetermined');
   const [busy, setBusy] = useState(false);
-  const os = detectOS();
+  const { capability } = useHotkeySettings();
 
   const refresh = async () => {
     const [a, m] = await Promise.all([
@@ -124,13 +125,13 @@ export function Onboarding({ onComplete }: OnboardingProps) {
 
         <PermissionStep
           index={1}
-          title={os === 'win' ? '全局快捷键' : '辅助功能'}
-          desc={os === 'win'
-            ? 'Windows 不需要 macOS 辅助功能权限；这里用于确认全局快捷键监听可用。'
-            : '用于监听全局快捷键（默认 右 Option）并把识别结果写入光标位置。'}
+          title={capability?.requiresAccessibilityPermission ? '辅助功能' : '全局快捷键'}
+          desc={capability?.requiresAccessibilityPermission
+            ? `用于监听全局快捷键（默认 ${getHotkeyTriggerLabel(capability.availableTriggers[0])}）并把识别结果写入光标位置。`
+            : capability?.statusHint ?? '用于确认全局快捷键监听可用。'}
           status={accessibility}
           actionLabel={
-            accessibility === 'notApplicable'
+            !capability?.requiresAccessibilityPermission || accessibility === 'notApplicable'
               ? '无需授权'
               : accessibility === 'granted'
               ? '已授权'
@@ -139,8 +140,8 @@ export function Onboarding({ onComplete }: OnboardingProps) {
                 : '授权'
           }
           onAction={onGrantAccessibility}
-          disabled={busy || accessibility === 'granted' || accessibility === 'notApplicable'}
-          hint={os === 'mac' ? '授权后必须**完全退出 OpenLess** 再重新打开（macOS TCC 规则）。' : undefined}
+          disabled={busy || !capability?.requiresAccessibilityPermission || accessibility === 'granted' || accessibility === 'notApplicable'}
+          hint={capability?.requiresAccessibilityPermission ? '授权后必须**完全退出 OpenLess** 再重新打开（macOS TCC 规则）。' : undefined}
         />
 
         <PermissionStep
