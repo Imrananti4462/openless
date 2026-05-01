@@ -4,8 +4,9 @@
 //
 // Ported verbatim from design_handoff_openless/variants.jsx::FloatingShell.
 
-import { useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type ComponentType, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isDialogStatus, UpdateDialog, useAutoUpdate } from './AutoUpdate';
 import { Icon } from './Icon';
 import { WindowChrome, detectOS, type OS } from './WindowChrome';
 import { SettingsModal } from './SettingsModal';
@@ -14,7 +15,13 @@ import { History } from '../pages/History';
 import { Vocab } from '../pages/Vocab';
 import { Style } from '../pages/Style';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
+import {
+  HOTKEY_MODE_MIGRATION_ACK_KEY,
+  HOTKEY_MODE_MIGRATION_DEFERRED_KEY,
+  shouldShowHotkeyModeMigrationPrompt,
+} from '../lib/hotkeyMigration';
 import { getHotkeyTriggerLabel } from '../lib/hotkey';
+import { applyFontScale, readFontScale } from '../lib/fontScale';
 import { getCredentials, openExternal } from '../lib/ipc';
 import { OL_DATA } from '../lib/mockData';
 import {
@@ -39,6 +46,9 @@ const NAV_BASE: Array<Omit<NavItem, 'name'>> = [
   { id: 'style', icon: 'style', cmp: Style },
 ];
 
+const RELEASE_NOTES_URL = 'https://github.com/appergb/openless/releases';
+const HELP_DOCS_URL = 'https://github.com/appergb/openless#readme';
+
 interface FloatingShellProps {
   os?: OS;
   initialTab?: AppTab;
@@ -59,7 +69,29 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   const { currentTab, setCurrentTab, settingsOpen, setSettingsOpen } = useAppState(initialTab, initialSettings);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId | undefined>();
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
+  const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
+  const [helpPopoverOpen, setHelpPopoverOpen] = useState(false);
   const { hotkey } = useHotkeySettings();
+
+  // 字体档位 — 启动时按 localStorage 应用一次；之后改动来自 Settings 的"个性化"section。
+  useEffect(() => {
+    applyFontScale(readFontScale());
+  }, []);
+
+  // help popover 打开时，点击其他位置自动关闭
+  useEffect(() => {
+    if (!helpPopoverOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Element | null;
+      if (target && target.closest('[data-ol-footer-popover]')) return;
+      setHelpPopoverOpen(false);
+    };
+    const id = window.setTimeout(() => document.addEventListener('mousedown', onDown), 0);
+    return () => {
+      window.clearTimeout(id);
+      document.removeEventListener('mousedown', onDown);
+    };
+  }, [helpPopoverOpen]);
   const NAV = useMemo<NavItem[]>(
     () => NAV_BASE.map(b => ({ ...b, name: t(`nav.${b.id}`) })),
     [t],
@@ -80,9 +112,22 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
     };
   }, []);
 
+  useEffect(() => {
+    const acknowledgedValue = window.localStorage.getItem(HOTKEY_MODE_MIGRATION_ACK_KEY);
+    const deferredValue = window.sessionStorage.getItem(HOTKEY_MODE_MIGRATION_DEFERRED_KEY);
+    if (shouldShowHotkeyModeMigrationPrompt(acknowledgedValue, deferredValue)) {
+      setHotkeyModePromptOpen(true);
+    }
+  }, []);
+
   const rememberProviderPrompt = () => {
     window.sessionStorage.setItem(PROVIDER_SETUP_PROMPT_DEFERRED_KEY, '1');
     setProviderPromptOpen(false);
+  };
+
+  const deferHotkeyModePrompt = () => {
+    window.sessionStorage.setItem(HOTKEY_MODE_MIGRATION_DEFERRED_KEY, '1');
+    setHotkeyModePromptOpen(false);
   };
 
   const openSettings = (section?: SettingsSectionId) => {
@@ -93,6 +138,12 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   const openProviderSettings = () => {
     rememberProviderPrompt();
     openSettings('providers');
+  };
+
+  const openHotkeyRecordingSettings = () => {
+    window.localStorage.setItem(HOTKEY_MODE_MIGRATION_ACK_KEY, '1');
+    setHotkeyModePromptOpen(false);
+    openSettings('recording');
   };
 
   return (
@@ -109,13 +160,13 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
           zIndex: 1,
         }}>
 
-        {/* Sidebar — inside the raised console */}
+        {/* Sidebar — 透明地坐在外层磨砂底板上，让 LOGO/导航/快捷键/BETA/footer 共用同一片磨砂玻璃 */}
         <aside
           style={{
             width: 188,
             flexShrink: 0,
             display: 'flex', flexDirection: 'column',
-            background: 'linear-gradient(180deg, rgba(247,247,250,0.85) 0%, rgba(247,247,250,0.5) 100%)',
+            background: 'transparent',
             padding: '14px 10px 12px',
           }}>
 
@@ -170,19 +221,13 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
 
           <div style={{ flex: 1 }} />
 
-          {/* shortcut hint */}
-          <div
-            style={{
-              padding: '10px 10px 8px',
-              borderTop: '0.5px dashed var(--ol-line)',
-              marginTop: 8,
-            }}>
-
+          {/* shortcut hint — 不要 dashed 边框，否则会切断"整片磨砂玻璃"的视觉 */}
+          <div style={{ padding: '10px 10px 6px', marginTop: 6 }}>
             <div style={{ fontSize: 10.5, color: 'var(--ol-ink-4)', marginBottom: 6, letterSpacing: '0.02em' }}>{t('shell.shortcutLabel')}</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--ol-ink-2)' }}>
               <kbd style={{
               padding: '2px 7px', fontSize: 10.5,
-                background: '#fff', borderRadius: 5,
+                background: 'rgba(255,255,255,0.7)', borderRadius: 5,
                 border: '0.5px solid var(--ol-line-strong)',
                 fontFamily: 'var(--ol-font-mono)', color: 'var(--ol-ink)',
                 boxShadow: '0 1px 0 rgba(0,0,0,.04)',
@@ -191,55 +236,57 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
             </div>
           </div>
 
-          {/* trial / status */}
-          <div
-            style={{
-              marginTop: 10,
-              padding: 12,
-              borderRadius: 10,
-              background: 'linear-gradient(160deg, rgba(37,99,235,0.08) 0%, rgba(37,99,235,0.02) 100%)',
-              border: '0.5px solid rgba(37,99,235,0.15)',
-            }}>
-
+          {/* BETA 区域 — 去掉描边和实色背景，让它和底部 footer 一起浮在磨砂玻璃上 */}
+          <div style={{ marginTop: 8, padding: '10px 10px 4px' }}>
             <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--ol-blue)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>{t('shell.betaTag')}</div>
             <div style={{ fontSize: 11.5, color: 'var(--ol-ink-2)', marginTop: 4, lineHeight: 1.5 }}>{t('shell.betaNote')}</div>
           </div>
         </aside>
 
-        {/* Main content — inset white card sitting on the frosted backplate */}
+        {/* Main content — inset white card sitting on the frosted backplate.
+            内卡圆角与外层窗口（WindowChrome 20/14）对齐，避免视觉上"两个不一致的圆角"。 */}
         <div style={{ flex: 1, minWidth: 0, padding: '6px 8px 6px 0', display: 'flex' }}>
           <main
             style={{
               flex: 1, minWidth: 0,
               overflow: 'hidden',
               background: 'var(--ol-surface)',
-              borderRadius: 12,
+              borderRadius: os === 'mac' ? 20 : 14,
               border: '0.5px solid rgba(0,0,0,0.06)',
               boxShadow: '0 1px 0 rgba(255,255,255,0.8) inset, 0 8px 24px -12px rgba(15,17,22,0.10), 0 2px 6px -2px rgba(15,17,22,0.06)',
               display: 'flex',
               flexDirection: 'column',
             }}
           >
-            <div style={{ padding: '24px 28px 32px', flex: 1, minHeight: 0, overflow: 'auto' }}>
-              {/* key={currentTab} 让每次切换重挂这棵子树 → ol-page-fade keyframe 重新触发 */}
-              <div
-                key={currentTab}
-                style={{
-                  animation: 'ol-page-fade 0.18s ease-out',
-                }}
-              >
-                {currentTab === 'overview' ? (
-                  <Overview onOpenHistory={() => setCurrentTab('history')} />
-                ) : (
-                  <Page />
-                )}
-              </div>
+            {/* key={currentTab} 让每次切换重挂这棵子树 → ol-page-slide keyframe 重新触发。
+                padding + overflow:auto 直接挂在这棵 wrapper 上：
+                  - 自然高度的页（Overview / Vocab / Style）—— 整页内容超出时 wrapper 出现滚动条
+                  - 用 height:100% 撑满的页（History 左右双列）—— 100% 能解析到 wrapper 的固定高度，
+                    两列内部各自的 overflow:auto 才能独立滚动 */}
+            <div
+              key={currentTab}
+              style={{
+                flex: 1, minHeight: 0,
+                overflow: 'auto',
+                padding: '24px 28px 32px',
+                // 苹果"spring out"风格的曲线：开始快、收尾顺滑，符合人体直觉
+                animation: 'ol-page-slide 0.32s cubic-bezier(0.32, 0.72, 0, 1) both',
+                willChange: 'opacity, transform',
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
+              {currentTab === 'overview' ? (
+                <Overview onOpenHistory={() => setCurrentTab('history')} />
+              ) : (
+                <Page />
+              )}
             </div>
           </main>
         </div>
       </div>
 
-      {/* Footer — sits on frosted outer, like Typeless */}
+      {/* Footer — 透明地坐在外层磨砂底板上，跟 sidebar 同一片磨砂玻璃 */}
       <div
         style={{
           flexShrink: 0,
@@ -256,29 +303,21 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
         <FooterIcon name="user" tip={t('shell.footer.account')} onClick={() => openSettings('providers')} />
         <FooterIcon name="mail" tip={t('shell.footer.feedback')} onClick={() => openExternal('https://github.com/appergb/openless/issues')} />
         <FooterIcon name="settings" tip={t('shell.footer.settings')} active={settingsOpen} onClick={() => openSettings()} />
-        <FooterIcon name="help" tip={t('shell.footer.help')} onClick={() => openExternal('https://github.com/appergb/openless#readme')} />
+
+        {/* 问号 — 点击展开版本说明 popover */}
+        <FooterIconWithPopover
+          name="help"
+          tip={t('shell.footer.help')}
+          open={helpPopoverOpen}
+          onToggle={() => setHelpPopoverOpen(o => !o)}
+        >
+          <HelpPopoverBody />
+        </FooterIconWithPopover>
 
         <div style={{ flex: 1 }} />
 
         <span style={{ fontFamily: 'var(--ol-font-sans)' }}>{t('shell.footer.version', { version: APP_VERSION_LABEL })}</span>
-        <button
-          onClick={() => openExternal('https://github.com/appergb/openless/releases')}
-          style={{
-            color: 'var(--ol-blue)',
-            marginLeft: 8,
-            textDecoration: 'none',
-            fontWeight: 500,
-            border: 0,
-            background: 'transparent',
-            fontFamily: 'inherit',
-            fontSize: 11,
-            cursor: 'default',
-            padding: 0,
-            transition: 'opacity 0.12s ease-out',
-          }}
-        >
-          {t('shell.footer.checkUpdates')}
-        </button>
+        <FooterAutoUpdateButton />
       </div>
 
       {/* Settings modal — rendered inside this window */}
@@ -291,22 +330,31 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
         />
       }
 
-      {providerPromptOpen && (
+      {providerPromptOpen ? (
         <ProviderSetupPrompt
           onLater={rememberProviderPrompt}
           onOpenSettings={openProviderSettings}
         />
-      )}
+      ) : hotkeyModePromptOpen ? (
+        <HotkeyModeMigrationPrompt
+          onLater={deferHotkeyModePrompt}
+          onOpenSettings={openHotkeyRecordingSettings}
+        />
+      ) : null}
 
-      {/* tab 切换 + provider prompt 公用的入场关键帧 */}
+      {/* tab 切换 + provider prompt + footer popover 公用的入场关键帧 */}
       <style>{`
-        @keyframes ol-page-fade {
-          from { opacity: 0; transform: translateY(4px); }
-          to   { opacity: 1; transform: translateY(0); }
+        @keyframes ol-page-slide {
+          from { opacity: 0; transform: translate3d(14px, 0, 0); }
+          to   { opacity: 1; transform: translate3d(0, 0, 0); }
         }
         @keyframes ol-prompt-fade { from { opacity: 0 } to { opacity: 1 } }
         @keyframes ol-prompt-pop {
           from { opacity: 0; transform: translateY(6px) scale(.97); }
+          to   { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes ol-popover-pop {
+          from { opacity: 0; transform: translateY(6px) scale(.96); }
           to   { opacity: 1; transform: translateY(0) scale(1); }
         }
       `}</style>
@@ -407,6 +455,99 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
   );
 }
 
+function HotkeyModeMigrationPrompt({ onLater, onOpenSettings }: { onLater: () => void; onOpenSettings: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 70,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 28,
+        background: 'rgba(15,17,22,0.28)',
+        backdropFilter: 'blur(2px)',
+        WebkitBackdropFilter: 'blur(2px)',
+        animation: 'ol-prompt-fade 0.18s ease-out',
+      }}
+    >
+      <div
+        style={{
+          width: 380,
+          borderRadius: 12,
+          background: 'var(--ol-surface)',
+          border: '0.5px solid rgba(0,0,0,.08)',
+          boxShadow: '0 24px 70px -24px rgba(15,17,22,.38), 0 0 0 0.5px rgba(0,0,0,.06)',
+          padding: 20,
+          animation: 'ol-prompt-pop 0.22s cubic-bezier(.2,.9,.3,1.1)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+          <div
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 8,
+              background: 'rgba(37,99,235,0.10)',
+              color: 'var(--ol-blue)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <Icon name="mic" size={17} />
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>{t('shell.hotkeyModePrompt.title')}</div>
+        </div>
+        <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.55 }}>
+          {t('shell.hotkeyModePrompt.body')}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+          <button
+            onClick={onLater}
+            style={{
+              height: 32,
+              padding: '0 13px',
+              borderRadius: 8,
+              border: '0.5px solid var(--ol-line-strong)',
+              background: 'var(--ol-surface)',
+              color: 'var(--ol-ink-3)',
+              fontFamily: 'inherit',
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: 'default',
+              transition: 'background 0.12s ease-out, border-color 0.12s ease-out',
+            }}
+          >
+            {t('shell.hotkeyModePrompt.later')}
+          </button>
+          <button
+            onClick={onOpenSettings}
+            style={{
+              height: 32,
+              padding: '0 14px',
+              borderRadius: 8,
+              border: 0,
+              background: 'var(--ol-ink)',
+              color: '#fff',
+              fontFamily: 'inherit',
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: 'default',
+              transition: 'background 0.12s ease-out, transform 0.08s ease-out',
+            }}
+          >
+            {t('shell.hotkeyModePrompt.openSettings')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface FooterIconProps {
   name: string;
   tip: string;
@@ -415,19 +556,158 @@ interface FooterIconProps {
 }
 
 function FooterIcon({ name, tip, active, onClick }: FooterIconProps) {
+  const [hover, setHover] = useState(false);
+  // 选中（active）= popover 打开，深灰；hover = 浅灰；其它 = 透明
+  const background = active
+    ? 'rgba(0,0,0,0.10)'
+    : hover
+      ? 'rgba(0,0,0,0.05)'
+      : 'transparent';
   return (
     <button
       onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       title={tip}
       style={{
         width: 30, height: 30, borderRadius: 7, border: 0,
-        background: active ? 'rgba(0,0,0,0.06)' : 'transparent',
-        color: active ? 'var(--ol-ink)' : 'var(--ol-ink-4)',
+        background,
+        color: active ? 'var(--ol-ink)' : hover ? 'var(--ol-ink-2)' : 'var(--ol-ink-4)',
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         cursor: 'default',
         transition: 'background 0.12s ease-out, color 0.12s ease-out',
       }}>
       <Icon name={name} size={15} />
     </button>
+  );
+}
+
+// 把 footer icon 和它的 popover 绑在同一个相对定位容器里，popover 锚定在按钮正上方。
+function FooterIconWithPopover({
+  name, tip, open, onToggle, children,
+}: {
+  name: string;
+  tip: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div data-ol-footer-popover style={{ position: 'relative', display: 'inline-flex' }}>
+      <FooterIcon name={name} tip={tip} active={open} onClick={onToggle} />
+      {open && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 'calc(100% + 8px)',
+            left: 0,
+            zIndex: 80,
+            minWidth: 220,
+            padding: 12,
+            borderRadius: 12,
+            background: 'rgba(255,255,255,0.96)',
+            backdropFilter: 'blur(20px) saturate(180%)',
+            WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+            border: '0.5px solid rgba(0,0,0,0.08)',
+            boxShadow: '0 18px 50px -22px rgba(15,17,22,0.32), 0 0 0 0.5px rgba(0,0,0,0.05)',
+            animation: 'ol-popover-pop 0.18s cubic-bezier(0.32, 0.72, 0, 1) both',
+            transformOrigin: 'bottom left',
+          }}
+        >
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HelpPopoverBody() {
+  const { t } = useTranslation();
+  return (
+    <div style={{ minWidth: 240 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <img src="AppIcon.png" alt="" style={{ width: 26, height: 26, borderRadius: 6, boxShadow: '0 1px 2px rgba(0,0,0,.1), 0 0 0 0.5px rgba(0,0,0,.06)' }} />
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink)' }}>OpenLess</div>
+          <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', fontFamily: 'var(--ol-font-mono)', marginTop: 1 }}>{APP_VERSION_LABEL}</div>
+        </div>
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--ol-ink-3)', lineHeight: 1.55, marginBottom: 10 }}>
+        {t('shell.footer.helpPopover.tagline')}
+      </div>
+      <button onClick={() => openExternal(RELEASE_NOTES_URL)} style={popoverLinkStyle}>
+        {t('shell.footer.helpPopover.releaseNotes')}
+      </button>
+      <button onClick={() => openExternal(HELP_DOCS_URL)} style={popoverLinkStyle}>
+        {t('shell.footer.helpPopover.docs')}
+      </button>
+    </div>
+  );
+}
+
+const popoverLinkStyle: CSSProperties = {
+  display: 'block',
+  width: '100%',
+  border: 0,
+  background: 'transparent',
+  color: 'var(--ol-blue)',
+  fontFamily: 'inherit',
+  fontSize: 12,
+  fontWeight: 500,
+  cursor: 'default',
+  textAlign: 'left',
+  padding: '6px 4px',
+};
+
+// Footer 的"检查更新"按钮 — 复用 Settings 页面的 useAutoUpdate hook + UpdateDialog 窗口，
+// 跟"关于"section 走完全相同的状态机和确认对话框。按钮本身只显示触发文案 + 简短状态。
+function FooterAutoUpdateButton() {
+  const { t } = useTranslation();
+  const u = useAutoUpdate();
+
+  const inlineHint = u.status === 'none'
+    ? t('settings.about.upToDate')
+    : u.status === 'error'
+      ? t('settings.about.updateError')
+      : null;
+  const inlineHintColor = u.status === 'error' ? 'var(--ol-err)' : 'var(--ol-ink-4)';
+
+  return (
+    <>
+      <button
+        onClick={u.checkForUpdates}
+        disabled={u.checking || u.busy}
+        style={{
+          color: 'var(--ol-blue)',
+          marginLeft: 8,
+          textDecoration: 'none',
+          fontWeight: 500,
+          border: 0,
+          background: 'transparent',
+          fontFamily: 'inherit',
+          fontSize: 11,
+          cursor: 'default',
+          padding: 0,
+          opacity: u.checking || u.busy ? 0.7 : 1,
+          transition: 'opacity 0.12s ease-out',
+        }}
+      >
+        {u.checking ? t('settings.about.checkingUpdate') : t('settings.about.checkUpdateBtn')}
+      </button>
+      {inlineHint && (
+        <span style={{ marginLeft: 8, color: inlineHintColor, fontSize: 11 }}>{inlineHint}</span>
+      )}
+      {isDialogStatus(u.status) && (
+        <UpdateDialog
+          status={u.status}
+          version={u.version}
+          progress={u.progress}
+          downloaded={u.downloaded}
+          contentLength={u.contentLength}
+          onInstall={u.installUpdate}
+          onClose={u.dismissDialog}
+        />
+      )}
+    </>
   );
 }

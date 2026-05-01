@@ -497,46 +497,45 @@ impl VolcengineStreamingASR {
 
 impl AudioConsumer for VolcengineStreamingASR {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
-        let runtime = {
+        // 一次性把就绪 chunk 全部 drain 出来（同一把 state 锁内分配 seq，保证 seq 单调）。
+        // 然后 spawn 一个串行 send 的 task —— 不要每块一个 spawn，否则 burst flush 时多
+        // 个 task 异步竞争 writer 锁，发送顺序和 seq 顺序对不上，服务端会报
+        // "autoAssignedSequence (N) mismatch sequence in request (N+1)" 直接断连。
+        let (runtime, chunks) = {
             let mut st = self.state.lock();
             if !st.is_connected {
                 return;
             }
             st.pending_audio.extend_from_slice(pcm);
-            st.runtime.clone()
+
+            let mut out: Vec<(i32, Vec<u8>)> = Vec::new();
+            while st.pending_audio.len() >= TARGET_AUDIO_CHUNK_BYTES {
+                let chunk: Vec<u8> = st.pending_audio.drain(..TARGET_AUDIO_CHUNK_BYTES).collect();
+                let seq = st.next_sequence;
+                st.next_sequence += 1;
+                st.bytes_sent += chunk.len();
+                st.frames_sent += 1;
+                out.push((seq, chunk));
+            }
+            (st.runtime.clone(), out)
         };
 
+        if chunks.is_empty() {
+            return;
+        }
         let Some(runtime) = runtime else {
             return;
         };
 
-        // Drain as many full chunks as we have, spawning one send per chunk.
-        loop {
-            let chunk_and_seq = {
-                let mut st = self.state.lock();
-                if st.pending_audio.len() < TARGET_AUDIO_CHUNK_BYTES {
-                    None
-                } else {
-                    let chunk: Vec<u8> =
-                        st.pending_audio.drain(..TARGET_AUDIO_CHUNK_BYTES).collect();
-                    let seq = st.next_sequence;
-                    st.next_sequence += 1;
-                    st.bytes_sent += chunk.len();
-                    st.frames_sent += 1;
-                    Some((chunk, seq))
-                }
-            };
-
-            let Some((chunk, seq)) = chunk_and_seq else {
-                break;
-            };
-
-            let writer = Arc::clone(&self.writer);
-            // pending_sends + Notify 让 send_last_frame 知道何时所有 chunk 都已发出。
-            self.pending_sends.fetch_add(1, Ordering::SeqCst);
-            let pending = Arc::clone(&self.pending_sends);
-            let notify = Arc::clone(&self.send_done);
-            runtime.spawn(async move {
+        // pending_sends + Notify 让 send_last_frame 知道何时所有 chunk 都已发出。
+        // 单 task 内串行 send，所以一次性 +N、收尾 -N。
+        let count = chunks.len();
+        self.pending_sends.fetch_add(count, Ordering::SeqCst);
+        let writer = Arc::clone(&self.writer);
+        let pending = Arc::clone(&self.pending_sends);
+        let notify = Arc::clone(&self.send_done);
+        runtime.spawn(async move {
+            for (seq, chunk) in chunks {
                 let frame = frame::build(
                     MessageType::AudioOnlyRequest,
                     Flags::PositiveSequence,
@@ -548,11 +547,11 @@ impl AudioConsumer for VolcengineStreamingASR {
                     // 把丢帧错误顶到日志里，定位"为什么服务端只收到 100ms"
                     log::error!("[asr] audio frame seq={} send 失败: {}", seq, e);
                 }
-                if pending.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    notify.notify_waiters();
-                }
-            });
-        }
+            }
+            if pending.fetch_sub(count, Ordering::SeqCst) == count {
+                notify.notify_waiters();
+            }
+        });
     }
 }
 

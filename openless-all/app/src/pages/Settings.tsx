@@ -3,22 +3,21 @@
 // keep their inline-style literals 1:1 with the source JSX.
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import type { Update, DownloadEvent } from '@tauri-apps/plugin-updater';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
+import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../components/AutoUpdate';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
+import { isHotkeyModeMigrationNoticeActive } from '../lib/hotkeyMigration';
 import { getHotkeyStartStopLabel, getHotkeyTriggerLabel } from '../lib/hotkey';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
   getHotkeyStatus,
-  isTauri,
   openExternal,
   openSystemSettings,
   readCredential,
   requestAccessibilityPermission,
   requestMicrophonePermission,
-  restartApp,
   setActiveAsrProvider,
   setActiveLlmProvider,
   setCredential,
@@ -146,6 +145,25 @@ function RecordingSection() {
     <Card>
       <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('settings.recording.title')}</div>
       <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 6 }}>{t('settings.recording.desc')}</div>
+      {isHotkeyModeMigrationNoticeActive() && (
+        <div
+          style={{
+            marginTop: 10,
+            marginBottom: 8,
+            padding: '12px 14px',
+            borderRadius: 10,
+            background: 'rgba(37,99,235,0.08)',
+            border: '0.5px solid rgba(37,99,235,0.18)',
+          }}
+        >
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ol-blue)', marginBottom: 4 }}>
+            {t('settings.recording.migrationNoticeTitle')}
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-3)', lineHeight: 1.55 }}>
+            {t('settings.recording.migrationNoticeDesc')}
+          </div>
+        </div>
+      )}
       <SettingRow label={t('settings.recording.hotkeyLabel')} desc={hotkeyDesc}>
         <select
           value={prefs.hotkey.trigger}
@@ -791,188 +809,35 @@ function AboutSection() {
   );
 }
 
-type UpdateStatus = 'idle' | 'checking' | 'available' | 'none' | 'downloading' | 'installing' | 'downloaded' | 'error';
-
 export function AboutUpdateControl({ tagline }: { tagline: string }) {
   const { t } = useTranslation();
-  const updateRef = useRef<Update | null>(null);
-  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
-  const [version, setVersion] = useState('');
-  const [downloaded, setDownloaded] = useState(0);
-  const [contentLength, setContentLength] = useState<number | null>(null);
-
-  const checking = updateStatus === 'checking';
-  const busy = updateStatus === 'downloading' || updateStatus === 'installing';
-  const progress = contentLength && contentLength > 0 ? Math.min(100, Math.round((downloaded / contentLength) * 100)) : null;
-
-  const closeUpdate = async () => {
-    const current = updateRef.current;
-    updateRef.current = null;
-    if (current) {
-      try {
-        await current.close();
-      } catch (error) {
-        console.warn('[settings] failed to close update resource', error);
-      }
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      void closeUpdate();
-    };
-  }, []);
-
-  const resetProgress = () => {
-    setDownloaded(0);
-    setContentLength(null);
-  };
-
-  const checkForUpdates = async () => {
-    setUpdateStatus('checking');
-    setVersion('');
-    resetProgress();
-    await closeUpdate();
-    try {
-      if (!isTauri) {
-        setUpdateStatus('none');
-        return;
-      }
-      const { check } = await import('@tauri-apps/plugin-updater');
-      const next = await check();
-      updateRef.current = next;
-      setVersion(next?.version ?? '');
-      setUpdateStatus(next ? 'available' : 'none');
-    } catch (error) {
-      console.error('[settings] failed to check update', error);
-      setUpdateStatus('error');
-    }
-  };
-
-  const installUpdate = async () => {
-    const update = updateRef.current;
-    if (!update) return;
-    resetProgress();
-    setUpdateStatus('downloading');
-    try {
-      await update.download((event: DownloadEvent) => {
-        if (event.event === 'Started') {
-          resetProgress();
-          setContentLength(event.data.contentLength ?? null);
-        } else if (event.event === 'Progress') {
-          setDownloaded(value => value + event.data.chunkLength);
-        } else if (event.event === 'Finished') {
-          setUpdateStatus('installing');
-        }
-      });
-      setUpdateStatus('installing');
-      await update.install();
-      await closeUpdate();
-      setUpdateStatus('downloaded');
-    } catch (error) {
-      console.error('[settings] failed to install update', error);
-      await closeUpdate();
-      setUpdateStatus('error');
-    }
-  };
-
-  const dismissUpdateDialog = async () => {
-    if (busy) return;
-    await closeUpdate();
-    setUpdateStatus('idle');
-    setVersion('');
-    resetProgress();
-  };
-
+  const u = useAutoUpdate();
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
         <span style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>{tagline} · {APP_VERSION_LABEL}</span>
-        <Btn variant="ghost" size="sm" onClick={checkForUpdates} disabled={checking || busy}>
-          {checking ? t('settings.about.checkingUpdate') : t('settings.about.checkUpdateBtn')}
+        <Btn variant="ghost" size="sm" onClick={u.checkForUpdates} disabled={u.checking || u.busy}>
+          {u.checking ? t('settings.about.checkingUpdate') : t('settings.about.checkUpdateBtn')}
         </Btn>
       </div>
-      {(updateStatus === 'none' || updateStatus === 'error') && (
-        <div style={{ fontSize: 11, color: updateStatus === 'error' ? 'var(--ol-err)' : 'var(--ol-ink-4)', marginTop: 4 }}>
-          {updateStatus === 'none' ? t('settings.about.upToDate') : t('settings.about.updateError')}
+      {(u.status === 'none' || u.status === 'error') && (
+        <div style={{ fontSize: 11, color: u.status === 'error' ? 'var(--ol-err)' : 'var(--ol-ink-4)', marginTop: 4 }}>
+          {u.status === 'none' ? t('settings.about.upToDate') : t('settings.about.updateError')}
         </div>
       )}
-      {(updateStatus === 'available' || updateStatus === 'downloading' || updateStatus === 'installing' || updateStatus === 'downloaded') && (
+      {isDialogStatus(u.status) && (
         <UpdateDialog
-          status={updateStatus}
-          version={version}
-          progress={progress}
-          downloaded={downloaded}
-          contentLength={contentLength}
-          onInstall={installUpdate}
-          onRestart={restartApp}
-          onClose={dismissUpdateDialog}
+          status={u.status}
+          version={u.version}
+          progress={u.progress}
+          downloaded={u.downloaded}
+          contentLength={u.contentLength}
+          onInstall={u.installUpdate}
+          onClose={u.dismissDialog}
         />
       )}
     </>
   );
-}
-
-function UpdateDialog({
-  status,
-  version,
-  progress,
-  downloaded,
-  contentLength,
-  onInstall,
-  onRestart,
-  onClose,
-}: {
-  status: 'available' | 'downloading' | 'installing' | 'downloaded';
-  version: string;
-  progress: number | null;
-  downloaded: number;
-  contentLength: number | null;
-  onInstall: () => void;
-  onRestart: () => void;
-  onClose: () => void;
-}) {
-  const { t } = useTranslation();
-  const downloading = status === 'downloading';
-  const installing = status === 'installing';
-  return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.18)', display: 'grid', placeItems: 'center', zIndex: 40 }}>
-      <div style={{ width: 360, borderRadius: 16, background: 'var(--ol-surface)', border: '0.5px solid var(--ol-line-strong)', boxShadow: '0 18px 42px rgba(0,0,0,0.18)', padding: 18 }}>
-        <div style={{ fontSize: 15, fontWeight: 650, marginBottom: 8 }}>{t(`settings.about.updateDialog.${status}.title`)}</div>
-        <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.6, marginBottom: 14 }}>
-          {t(`settings.about.updateDialog.${status}.desc`, { version })}
-        </div>
-        {(downloading || installing || status === 'downloaded') && (
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ height: 8, borderRadius: 999, background: 'var(--ol-surface-2)', overflow: 'hidden', border: '0.5px solid var(--ol-line)' }}>
-              <div style={{ height: '100%', width: `${status === 'downloaded' || installing ? 100 : progress ?? 8}%`, background: 'var(--ol-blue)', transition: 'width 0.18s ease-out' }} />
-            </div>
-            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--ol-ink-4)' }}>
-              {installing
-                ? t('settings.about.updateDialog.installingLabel')
-                : progress === null
-                  ? t('settings.about.updateDialog.progressUnknown', { downloaded: formatBytes(downloaded) })
-                  : t('settings.about.updateDialog.progress', { progress, downloaded: formatBytes(downloaded), total: formatBytes(contentLength ?? 0) })}
-            </div>
-          </div>
-        )}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          {status === 'available' && <Btn size="sm" onClick={onClose}>{t('common.cancel')}</Btn>}
-          {status === 'available' && <Btn variant="blue" size="sm" onClick={onInstall}>{t('settings.about.updateDialog.install')}</Btn>}
-          {(downloading || installing) && <Btn size="sm" disabled>{installing ? t('settings.about.updateDialog.installingLabel') : t('settings.about.updateDialog.downloadingLabel')}</Btn>}
-          {status === 'downloaded' && <Btn size="sm" onClick={onClose}>{t('settings.about.updateDialog.later')}</Btn>}
-          {status === 'downloaded' && <Btn variant="blue" size="sm" onClick={onRestart}>{t('settings.about.updateDialog.restartNow')}</Btn>}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function formatBytes(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return '0 B';
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function HotkeyStatusPill({ status }: { status: HotkeyStatus | null }) {
