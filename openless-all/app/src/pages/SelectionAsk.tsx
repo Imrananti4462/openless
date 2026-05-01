@@ -10,6 +10,7 @@ import { Card, PageHeader } from './_atoms';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { setQaHotkey } from '../lib/ipc';
 import type { QaHotkeyBinding } from '../lib/types';
+import { detectOS } from '../components/WindowChrome';
 
 const QA_HOTKEY_DISABLED_ID = 'disabled' as const;
 
@@ -19,15 +20,27 @@ interface QaHotkeyPreset {
   label: string;
 }
 
-const QA_HOTKEY_PRESETS: readonly QaHotkeyPreset[] = [
-  // v2 改成 panel toggle hotkey（不再触发录音）。Option 不能出现在这条 hotkey 里——
-  // 浮窗一旦可见，rightOption 边沿就被 QA 路由抢走了，主听写转给 Option 也共用同一个键。
-  // 只留 Cmd+Shift+... 这种零冲突组合。详见 issue #118 v2。
+// macOS：用 Cmd 修饰键，跟系统其他快捷键肌肉记忆一致。
+const QA_HOTKEY_PRESETS_MAC: readonly QaHotkeyPreset[] = [
   { id: 'cmd+shift+;', label: 'Cmd+Shift+;', binding: { primary: ';', modifiers: ['cmd', 'shift'] } },
   { id: 'cmd+shift+/', label: 'Cmd+Shift+/', binding: { primary: '/', modifiers: ['cmd', 'shift'] } },
   { id: 'cmd+shift+.', label: 'Cmd+Shift+.', binding: { primary: '.', modifiers: ['cmd', 'shift'] } },
   { id: 'cmd+shift+,', label: 'Cmd+Shift+,', binding: { primary: ',', modifiers: ['cmd', 'shift'] } },
 ] as const;
+
+// Windows：用 Ctrl 修饰键（macOS Cmd 的对等键）。**不**用 Fn——Win32 的
+// `RegisterHotKey` 和 `WH_KEYBOARD_LL` 都收不到 Fn 的虚拟键码（硬件级 modifier，
+// 在 OS 内核之下被吃掉），写进 preset 用户也注册不上。**不**用 Win+x——
+// 大部分 Win+x 已被系统 / Cortana 占用。
+const QA_HOTKEY_PRESETS_WIN: readonly QaHotkeyPreset[] = [
+  { id: 'ctrl+shift+;', label: 'Ctrl+Shift+;', binding: { primary: ';', modifiers: ['ctrl', 'shift'] } },
+  { id: 'ctrl+shift+/', label: 'Ctrl+Shift+/', binding: { primary: '/', modifiers: ['ctrl', 'shift'] } },
+  { id: 'ctrl+shift+.', label: 'Ctrl+Shift+.', binding: { primary: '.', modifiers: ['ctrl', 'shift'] } },
+  { id: 'ctrl+shift+,', label: 'Ctrl+Shift+,', binding: { primary: ',', modifiers: ['ctrl', 'shift'] } },
+] as const;
+
+const QA_HOTKEY_PRESETS: readonly QaHotkeyPreset[] =
+  detectOS() === 'mac' ? QA_HOTKEY_PRESETS_MAC : QA_HOTKEY_PRESETS_WIN;
 
 function bindingToPresetId(binding: QaHotkeyBinding | null): string {
   if (!binding) return QA_HOTKEY_DISABLED_ID;
