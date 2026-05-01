@@ -35,6 +35,15 @@ impl TextInserter {
         insert_with_clipboard_restore(text, restore_clipboard_after_paste)
     }
 
+    #[cfg(not(target_os = "macos"))]
+    pub fn insert_via_clipboard_fallback(
+        &self,
+        text: &str,
+        restore_clipboard_after_paste: bool,
+    ) -> InsertStatus {
+        self.insert(text, restore_clipboard_after_paste)
+    }
+
     /// Insert `text` at the current cursor position.
     #[cfg(target_os = "macos")]
     pub fn insert(&self, text: &str, _restore_clipboard_after_paste: bool) -> InsertStatus {

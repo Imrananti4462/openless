@@ -23,6 +23,7 @@ mod types;
 mod windows_ime_ipc;
 mod windows_ime_profile;
 mod windows_ime_protocol;
+mod windows_ime_session;
 
 #[cfg(target_os = "macos")]
 use std::sync::mpsc;
