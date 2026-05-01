@@ -1,5 +1,9 @@
 #include "text_service.h"
 
+#include <new>
+
+#include "edit_session.h"
+
 extern LONG g_object_count;
 
 OpenLessTextService::OpenLessTextService() {
@@ -84,8 +88,47 @@ HRESULT OpenLessTextService::SubmitTextFromPipe(
     const std::wstring& session_id,
     const std::wstring& text) {
   UNREFERENCED_PARAMETER(session_id);
-  UNREFERENCED_PARAMETER(text);
-  return E_NOTIMPL;
+
+  if (thread_mgr_ == nullptr || client_id_ == TF_CLIENTID_NULL) {
+    return E_UNEXPECTED;
+  }
+
+  ITfDocumentMgr* document_mgr = nullptr;
+  HRESULT hr = thread_mgr_->GetFocus(&document_mgr);
+  if (FAILED(hr)) {
+    return hr;
+  }
+  if (document_mgr == nullptr) {
+    return E_FAIL;
+  }
+
+  ITfContext* context = nullptr;
+  hr = document_mgr->GetTop(&context);
+  document_mgr->Release();
+  document_mgr = nullptr;
+  if (FAILED(hr)) {
+    return hr;
+  }
+  if (context == nullptr) {
+    return E_FAIL;
+  }
+
+  auto* session = new (std::nothrow) OpenLessEditSession(context, text);
+  if (session == nullptr) {
+    context->Release();
+    return E_OUTOFMEMORY;
+  }
+
+  HRESULT edit_result = S_OK;
+  hr = context->RequestEditSession(client_id_, session,
+                                   TF_ES_SYNC | TF_ES_READWRITE, &edit_result);
+  session->Release();
+  context->Release();
+
+  if (FAILED(hr)) {
+    return hr;
+  }
+  return edit_result;
 }
 
 HRESULT OpenLessTextService::StartIpcServer() {
