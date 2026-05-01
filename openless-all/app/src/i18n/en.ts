@@ -130,6 +130,7 @@ export const en: typeof zhCN = {
     chars: '{{count}} chars',
     vocabHits: '{{count}} vocab hits',
     inserted: 'Inserted',
+    pasteSent: 'Paste sent',
     copiedFallback: 'Copied (use {{shortcut}})',
     insertFailed: 'Insert failed',
     confirmClear: 'Delete all {{count}} history entries? This cannot be undone.',
