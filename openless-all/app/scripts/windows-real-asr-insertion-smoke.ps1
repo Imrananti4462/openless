@@ -5,6 +5,8 @@ param(
   [string]$Phrase = "OpenLess Windows real regression",
   [int]$TimeoutSeconds = 120,
   [int]$VirtualKey = 0xA3,
+  [int]$ManualSpeechSeconds = 8,
+  [switch]$ManualSpeech,
   [switch]$DebugHotkeyEvents
 )
 
@@ -356,7 +358,7 @@ try {
 
 $inputTarget = $null
 try {
-  if (-not (Wait-LogPattern $logPath "WH_KEYBOARD_LL installed" 20)) {
+  if (-not (Wait-LogPattern $logPath "hotkey listener installed|Windows low-level keyboard hook" 20)) {
     throw "Windows low-level keyboard hook was not installed."
   }
 
@@ -370,7 +372,12 @@ try {
     throw "OpenLess recording session did not start."
   }
 
-  Speak-TestPhrase $Phrase
+  if ($ManualSpeech) {
+    Write-Host "[action] Please speak into the real microphone for $ManualSpeechSeconds seconds."
+    Start-Sleep -Seconds $ManualSpeechSeconds
+  } else {
+    Speak-TestPhrase $Phrase
+  }
   Start-Sleep -Milliseconds 800
   Release-Hotkey
 
@@ -388,8 +395,8 @@ try {
   if ([string]::IsNullOrWhiteSpace($latest.rawTranscript) -or [string]::IsNullOrWhiteSpace($latest.finalText)) {
     throw "Latest history item is missing rawTranscript or finalText."
   }
-  if (@("copiedFallback", "pasteSent") -notcontains $latest.insertStatus) {
-    throw "Expected Windows insertStatus copiedFallback or pasteSent, got '$($latest.insertStatus)'."
+  if ($latest.insertStatus -ne "pasteSent") {
+    throw "Expected Windows insertStatus pasteSent after guarded foreground restore, got '$($latest.insertStatus)'."
   }
 
   Focus-Window $inputTarget.Process | Out-Null
@@ -402,6 +409,9 @@ try {
 
   if ([string]::IsNullOrWhiteSpace($targetText)) {
     throw "$Target clipboard readback is empty after Ctrl+A/C."
+  }
+  if (-not $targetText.Contains($latest.finalText)) {
+    throw "$Target readback does not contain latest finalText; insertion was not proven at the target caret."
   }
 
   Write-Host "[ok] History updated. raw='$($latest.rawTranscript)'"
