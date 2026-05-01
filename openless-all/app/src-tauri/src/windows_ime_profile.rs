@@ -192,8 +192,8 @@ mod windows_impl {
     use windows::Win32::UI::Input::KeyboardAndMouse::HKL;
     use windows::Win32::UI::TextServices::{
         CLSID_TF_InputProcessorProfiles, ITfInputProcessorProfileMgr, GUID_TFCAT_TIP_KEYBOARD,
-        TF_INPUTPROCESSORPROFILE, TF_IPPMF_FORPROCESS, TF_PROFILETYPE_INPUTPROCESSOR,
-        TF_PROFILETYPE_KEYBOARDLAYOUT,
+        TF_INPUTPROCESSORPROFILE, TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE, TF_IPPMF_FORSESSION,
+        TF_PROFILETYPE_INPUTPROCESSOR, TF_PROFILETYPE_KEYBOARDLAYOUT,
     };
     use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY};
     use winreg::RegKey;
@@ -201,6 +201,8 @@ mod windows_impl {
     const OPENLESS_COM_INPROC_KEY: &str =
         r"Software\Classes\CLSID\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\InprocServer32";
     const OPENLESS_TSF_PROFILE_KEY: &str = r"Software\Microsoft\CTF\TIP\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\LanguageProfile\0x00000804\{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E}";
+    const PROFILE_ACTIVATION_FLAGS: u32 =
+        TF_IPPMF_FORSESSION | TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE;
 
     struct ComApartment;
 
@@ -255,7 +257,7 @@ mod windows_impl {
                 &clsid,
                 &profile_guid,
                 null_hkl(),
-                TF_IPPMF_FORPROCESS,
+                PROFILE_ACTIVATION_FLAGS,
             )
         })
     }
@@ -274,7 +276,7 @@ mod windows_impl {
                         &clsid,
                         &profile_guid,
                         null_hkl(),
-                        TF_IPPMF_FORPROCESS,
+                        PROFILE_ACTIVATION_FLAGS,
                     )
                 })
             }
@@ -289,7 +291,7 @@ mod windows_impl {
                         &zero_guid,
                         &zero_guid,
                         hkl,
-                        TF_IPPMF_FORPROCESS,
+                        PROFILE_ACTIVATION_FLAGS,
                     )
                 })
             }
