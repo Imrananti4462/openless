@@ -1,7 +1,10 @@
 //! Tauri command surface — every IPC entry the React UI invokes lives here.
 
 use std::sync::Arc;
+use std::time::Duration;
 
+use serde::Serialize;
+use serde_json::Value;
 use tauri::{AppHandle, State};
 
 use crate::coordinator::Coordinator;
@@ -79,6 +82,123 @@ pub fn set_active_llm_provider(provider: String) -> Result<(), String> {
 pub fn read_credential(account: String) -> Result<Option<String>, String> {
     let acc = parse_account(&account)?;
     CredentialsVault::get(acc).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCheckResult {
+    ok: bool,
+    model_count: usize,
+}
+
+#[derive(Serialize)]
+pub struct ProviderModelsResult {
+    models: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn validate_provider_credentials(kind: String) -> Result<ProviderCheckResult, String> {
+    let config = read_openai_provider_config(&kind)?;
+    fetch_provider_models(&config)
+        .await
+        .map(|models| ProviderCheckResult {
+            ok: true,
+            model_count: models.len(),
+        })
+}
+
+#[tauri::command]
+pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, String> {
+    let config = read_openai_provider_config(&kind)?;
+    fetch_provider_models(&config)
+        .await
+        .map(|models| ProviderModelsResult { models })
+}
+
+struct ProviderConfig {
+    base_url: String,
+    api_key: String,
+}
+
+fn read_openai_provider_config(kind: &str) -> Result<ProviderConfig, String> {
+    let (api_key_account, endpoint_account) = match kind {
+        "llm" => (CredentialAccount::ArkApiKey, CredentialAccount::ArkEndpoint),
+        "asr" => (CredentialAccount::AsrApiKey, CredentialAccount::AsrEndpoint),
+        _ => return Err(format!("unknown provider kind: {kind}")),
+    };
+    let api_key = CredentialsVault::get(api_key_account)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let base_url = CredentialsVault::get(endpoint_account)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    if api_key.trim().is_empty() {
+        return Err("API Key 为空".to_string());
+    }
+    if base_url.trim().is_empty() {
+        return Err("Endpoint 为空".to_string());
+    }
+    Ok(ProviderConfig { base_url, api_key })
+}
+
+async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec<String>, String> {
+    let url = models_url(&config.base_url);
+    log::info!("[provider-check] GET {url}");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client 初始化失败: {e}"))?;
+    let response = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", config.api_key))
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                "请求超时".to_string()
+            } else {
+                format!("网络错误: {e}")
+            }
+        })?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("读取响应失败: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("providerHttpStatus:{}", status.as_u16()));
+    }
+    parse_model_ids(&body)
+}
+
+fn models_url(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.ends_with("/models") {
+        return trimmed.to_string();
+    }
+    if let Some(prefix) = trimmed.strip_suffix("/chat/completions") {
+        return format!("{prefix}/models");
+    }
+    format!("{trimmed}/models")
+}
+
+fn parse_model_ids(body: &str) -> Result<Vec<String>, String> {
+    let json: Value =
+        serde_json::from_str(body).map_err(|e| format!("模型列表不是有效 JSON: {e}"))?;
+    let data = json
+        .get("data")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "模型列表缺少 data 数组".to_string())?;
+    let mut models = data
+        .iter()
+        .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    models.sort();
+    models.dedup();
+    Ok(models)
 }
 
 fn parse_account(s: &str) -> Result<CredentialAccount, String> {
@@ -361,3 +481,28 @@ pub fn qa_window_pin(coord: CoordinatorState<'_>, pinned: bool) {
 
 #[allow(dead_code)]
 fn _ensure_snapshot_used(_: CredentialsSnapshot) {}
+
+#[cfg(test)]
+mod tests {
+    use super::{models_url, parse_model_ids};
+
+    #[test]
+    fn models_url_accepts_base_or_chat_endpoint() {
+        assert_eq!(
+            models_url("https://api.openai.com/v1"),
+            "https://api.openai.com/v1/models"
+        );
+        assert_eq!(
+            models_url("https://api.openai.com/v1/chat/completions"),
+            "https://api.openai.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn parse_model_ids_sorts_and_deduplicates() {
+        let models =
+            parse_model_ids(r#"{ "data": [{ "id": "b" }, { "id": "a" }, { "id": "b" }] }"#)
+                .unwrap();
+        assert_eq!(models, vec!["a".to_string(), "b".to_string()]);
+    }
+}

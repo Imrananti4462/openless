@@ -203,6 +203,8 @@ pub fn run() {
             commands::set_qa_hotkey,
             commands::qa_window_dismiss,
             commands::qa_window_pin,
+            commands::validate_provider_credentials,
+            commands::list_provider_models,
             restart_app,
         ])
         .build(tauri::generate_context!())
