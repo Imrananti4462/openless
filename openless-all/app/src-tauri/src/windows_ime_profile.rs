@@ -169,7 +169,7 @@ mod windows_impl {
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
         COINIT_APARTMENTTHREADED,
     };
-    use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardLayout, HKL};
+    use windows::Win32::UI::Input::KeyboardAndMouse::HKL;
     use windows::Win32::UI::TextServices::{
         CLSID_TF_InputProcessorProfiles, ITfInputProcessorProfileMgr, TF_INPUTPROCESSORPROFILE,
         GUID_TFCAT_TIP_KEYBOARD, TF_IPPMF_FORPROCESS, TF_PROFILETYPE_INPUTPROCESSOR,
@@ -198,26 +198,24 @@ mod windows_impl {
     }
 
     pub fn capture_active_profile() -> WindowsImeProfileResult<ImeProfileSnapshot> {
-        with_profile_manager(|manager| {
+        let profile = with_profile_manager(|manager| {
             let mut profile = TF_INPUTPROCESSORPROFILE::default();
             unsafe {
                 manager.GetActiveProfile(&active_profile_category_guid(), &mut profile)?;
             }
 
-            if profile.dwProfileType == TF_PROFILETYPE_INPUTPROCESSOR {
-                Ok(ImeProfileSnapshot::text_service(
-                    profile.langid,
-                    format!("{:?}", profile.clsid),
-                    format!("{:?}", profile.guidProfile),
-                ))
-            } else {
-                let hkl = unsafe { GetKeyboardLayout(0) };
-                Ok(ImeProfileSnapshot::keyboard_layout(
-                    lang_id_from_hkl(hkl),
-                    hkl_to_isize(hkl),
-                ))
-            }
-        })
+            Ok(profile)
+        })?;
+
+        if profile.dwProfileType == TF_PROFILETYPE_INPUTPROCESSOR {
+            Ok(ImeProfileSnapshot::text_service(
+                profile.langid,
+                format!("{:?}", profile.clsid),
+                format!("{:?}", profile.guidProfile),
+            ))
+        } else {
+            keyboard_layout_snapshot_from_tsf(profile.langid, profile.hkl)
+        }
     }
 
     pub fn activate_openless_profile() -> WindowsImeProfileResult<()> {
@@ -310,6 +308,20 @@ mod windows_impl {
         GUID_TFCAT_TIP_KEYBOARD
     }
 
+    pub(super) fn keyboard_layout_snapshot_from_tsf(
+        lang_id: u16,
+        hkl: HKL,
+    ) -> WindowsImeProfileResult<ImeProfileSnapshot> {
+        let hkl_value = hkl_to_isize(hkl);
+        if hkl_value == 0 {
+            return Err(WindowsImeProfileError::WindowsApi(
+                "active keyboard layout profile has no HKL".to_string(),
+            ));
+        }
+
+        Ok(ImeProfileSnapshot::keyboard_layout(lang_id, hkl_value))
+    }
+
     fn normalize_guid_string(value: &str) -> String {
         let upper = value.trim().to_ascii_uppercase();
         if upper.starts_with('{') && upper.ends_with('}') {
@@ -317,10 +329,6 @@ mod windows_impl {
         } else {
             format!("{{{upper}}}")
         }
-    }
-
-    fn lang_id_from_hkl(hkl: HKL) -> u16 {
-        (hkl_to_isize(hkl) as u32 & 0xffff) as u16
     }
 
     fn hkl_to_isize(hkl: HKL) -> isize {
@@ -406,6 +414,9 @@ mod tests {
 #[cfg(all(test, target_os = "windows"))]
 mod windows_tests {
     use super::*;
+    use std::ffi::c_void;
+    use std::ptr;
+    use windows::Win32::UI::Input::KeyboardAndMouse::HKL;
     use windows::Win32::UI::TextServices::GUID_TFCAT_TIP_KEYBOARD;
 
     #[test]
@@ -427,5 +438,28 @@ mod windows_tests {
             windows_impl::active_profile_category_guid(),
             GUID_TFCAT_TIP_KEYBOARD
         );
+    }
+
+    #[test]
+    fn keyboard_layout_snapshot_uses_tsf_profile_values() {
+        let snapshot = windows_impl::keyboard_layout_snapshot_from_tsf(
+            0x0411,
+            HKL(0x0411_0411usize as *mut c_void),
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.kind(), &ImeProfileKind::KeyboardLayout);
+        assert_eq!(snapshot.lang_id(), 0x0411);
+        assert_eq!(snapshot.hkl(), Some(0x0411_0411));
+    }
+
+    #[test]
+    fn keyboard_layout_snapshot_rejects_missing_hkl() {
+        let err = windows_impl::keyboard_layout_snapshot_from_tsf(0x0409, HKL(ptr::null_mut()))
+            .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("active keyboard layout profile has no HKL"));
     }
 }
