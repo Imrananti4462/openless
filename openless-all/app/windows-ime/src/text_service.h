@@ -9,7 +9,7 @@ class OpenLessTextService final : public ITfTextInputProcessorEx {
   OpenLessTextService();
   OpenLessTextService(const OpenLessTextService&) = delete;
   OpenLessTextService& operator=(const OpenLessTextService&) = delete;
-  ~OpenLessTextService() override;
+  ~OpenLessTextService();
 
   STDMETHODIMP QueryInterface(REFIID iid, void** object) override;
   STDMETHODIMP_(ULONG) AddRef() override;

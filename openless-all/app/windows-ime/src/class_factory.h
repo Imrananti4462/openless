@@ -7,7 +7,7 @@ class OpenLessClassFactory final : public IClassFactory {
   OpenLessClassFactory();
   OpenLessClassFactory(const OpenLessClassFactory&) = delete;
   OpenLessClassFactory& operator=(const OpenLessClassFactory&) = delete;
-  ~OpenLessClassFactory() override;
+  ~OpenLessClassFactory();
 
   STDMETHODIMP QueryInterface(REFIID iid, void** object) override;
   STDMETHODIMP_(ULONG) AddRef() override;

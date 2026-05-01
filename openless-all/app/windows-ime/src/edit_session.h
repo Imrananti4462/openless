@@ -9,7 +9,7 @@ class OpenLessEditSession final : public ITfEditSession {
   OpenLessEditSession(ITfContext* context, std::wstring text);
   OpenLessEditSession(const OpenLessEditSession&) = delete;
   OpenLessEditSession& operator=(const OpenLessEditSession&) = delete;
-  ~OpenLessEditSession() override;
+  ~OpenLessEditSession();
 
   STDMETHODIMP QueryInterface(REFIID iid, void** object) override;
   STDMETHODIMP_(ULONG) AddRef() override;
