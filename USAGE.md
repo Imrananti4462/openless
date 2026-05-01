@@ -32,6 +32,9 @@
 
 ### 填入凭据
 
+不会配火山 ASR 的话，先看这篇图文引导：  
+[OpenLess 火山 ASR 配置](docs/volcengine-setup.md)
+
 打开 OpenLess → **设置**，填入以下字段：
 
 | 字段 | 说明 |
