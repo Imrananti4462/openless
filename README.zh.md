@@ -122,6 +122,9 @@ OpenLess 只做一件事：**把语音变成可用的书面文字（尤其是 AI
 2. 打开「设置 → 权限」确认全局快捷键监听器已启动。
 3. 在「设置」中填入火山引擎 ASR 和 Ark 凭据。
 
+不会配火山 ASR 的话，直接看这篇图文引导：
+[OpenLess 火山 ASR 配置](docs/volcengine-setup.md)
+
 完整使用步骤见 [USAGE.md](USAGE.md)。
 
 ## 从源码构建（开发者）
