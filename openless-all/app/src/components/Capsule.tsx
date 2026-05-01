@@ -323,7 +323,7 @@ export function Capsule() {
           position: 'absolute',
           left: '50%',
           // bottom = 50%（pill 中线）+ pill 半高 21px（capsuleLayout mac=42）+ 8px 间隔。
-          // 胶囊窗口高度 110（tauri.conf.json）刚好装下 badge + 间隔 + pill。
+          // 只有翻译徽章可见时才需要额外高度；普通录音/转写状态由后端缩到 pill 本体，避免透明死区。
           bottom: 'calc(50% + 21px + 8px)',
           transform: 'translateX(-50%)',
           pointerEvents: 'none',

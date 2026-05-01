@@ -2451,6 +2451,7 @@ fn emit_capsule(
     let show_capsule = inner.prefs.get().show_capsule;
     if let Some(window) = app.get_webview_window("capsule") {
         let visible = !matches!(state, CapsuleState::Idle);
+        let _ = crate::position_capsule_bottom_center(&window, payload.translation);
         if show_capsule && visible {
             if cfg!(target_os = "windows") {
                 if !show_capsule_window_no_activate() {
