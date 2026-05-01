@@ -6,11 +6,53 @@ pub enum ImeProfileKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImeProfileSnapshot {
-    pub kind: ImeProfileKind,
-    pub lang_id: u16,
-    pub clsid: Option<String>,
-    pub profile_guid: Option<String>,
-    pub hkl: Option<isize>,
+    kind: ImeProfileKind,
+    lang_id: u16,
+    clsid: Option<String>,
+    profile_guid: Option<String>,
+    hkl: Option<isize>,
+}
+
+impl ImeProfileSnapshot {
+    pub fn text_service(lang_id: u16, clsid: String, profile_guid: String) -> Self {
+        Self {
+            kind: ImeProfileKind::TextService,
+            lang_id,
+            clsid: Some(clsid),
+            profile_guid: Some(profile_guid),
+            hkl: None,
+        }
+    }
+
+    pub fn keyboard_layout(lang_id: u16, hkl: isize) -> Self {
+        Self {
+            kind: ImeProfileKind::KeyboardLayout,
+            lang_id,
+            clsid: None,
+            profile_guid: None,
+            hkl: Some(hkl),
+        }
+    }
+
+    pub fn kind(&self) -> &ImeProfileKind {
+        &self.kind
+    }
+
+    pub fn lang_id(&self) -> u16 {
+        self.lang_id
+    }
+
+    pub fn clsid(&self) -> Option<&str> {
+        self.clsid.as_deref()
+    }
+
+    pub fn profile_guid(&self) -> Option<&str> {
+        self.profile_guid.as_deref()
+    }
+
+    pub fn hkl(&self) -> Option<isize> {
+        self.hkl
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,13 +127,39 @@ mod tests {
     use super::*;
 
     fn text_service_snapshot() -> ImeProfileSnapshot {
-        ImeProfileSnapshot {
-            kind: ImeProfileKind::TextService,
-            lang_id: 0x0804,
-            clsid: Some("{11111111-1111-1111-1111-111111111111}".to_string()),
-            profile_guid: Some("{22222222-2222-2222-2222-222222222222}".to_string()),
-            hkl: None,
-        }
+        ImeProfileSnapshot::text_service(
+            0x0804,
+            "{11111111-1111-1111-1111-111111111111}".to_string(),
+            "{22222222-2222-2222-2222-222222222222}".to_string(),
+        )
+    }
+
+    #[test]
+    fn text_service_constructor_sets_required_profile_data() {
+        let snapshot = text_service_snapshot();
+
+        assert_eq!(snapshot.kind(), &ImeProfileKind::TextService);
+        assert_eq!(snapshot.lang_id(), 0x0804);
+        assert_eq!(
+            snapshot.clsid(),
+            Some("{11111111-1111-1111-1111-111111111111}")
+        );
+        assert_eq!(
+            snapshot.profile_guid(),
+            Some("{22222222-2222-2222-2222-222222222222}")
+        );
+        assert_eq!(snapshot.hkl(), None);
+    }
+
+    #[test]
+    fn keyboard_layout_constructor_sets_required_hkl_data() {
+        let snapshot = ImeProfileSnapshot::keyboard_layout(0x0409, 0x0409_0409);
+
+        assert_eq!(snapshot.kind(), &ImeProfileKind::KeyboardLayout);
+        assert_eq!(snapshot.lang_id(), 0x0409);
+        assert_eq!(snapshot.clsid(), None);
+        assert_eq!(snapshot.profile_guid(), None);
+        assert_eq!(snapshot.hkl(), Some(0x0409_0409));
     }
 
     #[test]
