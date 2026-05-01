@@ -53,6 +53,15 @@ struct Inner {
     active_id: Arc<std::sync::atomic::AtomicU32>,
 }
 
+// global-hotkey 0.6 的 GlobalHotKeyManager 在 Windows 内部持有 HHOOK / window
+// handle 等 `*mut c_void`，crate 没标 Send/Sync。但这些句柄实际是 OS 进程级
+// 资源，跨线程读写是 OS 自己同步的；coordinator.rs 又需要把 `Arc<Inner>`（间接含
+// QaHotkeyMonitor）放进 async_runtime::spawn 里，强制要求 Send。手动标记。
+// macOS 上 GlobalHotKeyManager 内部用 Carbon EventHotKey，同理。
+// 与 hotkey.rs::CallbackContext 已有的 unsafe impl Send/Sync 同款做法。
+unsafe impl Send for Inner {}
+unsafe impl Sync for Inner {}
+
 impl QaHotkeyMonitor {
     /// 启动监听并注册一个 hotkey。`tx` 在每次按下边沿收到 `QaHotkeyEvent::Pressed`。
     ///

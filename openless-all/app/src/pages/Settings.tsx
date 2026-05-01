@@ -21,7 +21,6 @@ import {
   setActiveAsrProvider,
   setActiveLlmProvider,
   setCredential,
-  setQaHotkey,
 } from '../lib/ipc';
 import type {
   HotkeyCapability,
@@ -29,7 +28,6 @@ import type {
   HotkeyStatus,
   HotkeyTrigger,
   PermissionStatus,
-  QaHotkeyBinding,
 } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import i18n, {
@@ -134,37 +132,6 @@ function SettingRow({ label, desc, children }: SettingRowProps) {
   );
 }
 
-// QA 提问模式快捷键预设。详见 issue #118。
-// id="disabled" 是哨兵 — savePrefs({ qaHotkey: null }) 表示禁用。
-const QA_HOTKEY_DISABLED_ID = 'disabled' as const;
-
-interface QaHotkeyPreset {
-  id: string;
-  binding: QaHotkeyBinding;
-  /** UI 上展示的字面值；后端的 get_qa_hotkey_label 仅用作冗余提示，不必一致。 */
-  label: string;
-}
-
-const QA_HOTKEY_PRESETS: readonly QaHotkeyPreset[] = [
-  { id: 'cmd+shift+;',  label: 'Cmd+Shift+;',  binding: { primary: ';', modifiers: ['cmd', 'shift']  } },
-  { id: 'cmd+option+;', label: 'Cmd+Option+;', binding: { primary: ';', modifiers: ['cmd', 'option'] } },
-  { id: 'cmd+shift+/',  label: 'Cmd+Shift+/',  binding: { primary: '/', modifiers: ['cmd', 'shift']  } },
-  { id: 'cmd+option+/', label: 'Cmd+Option+/', binding: { primary: '/', modifiers: ['cmd', 'option'] } },
-] as const;
-
-function bindingToPresetId(binding: QaHotkeyBinding | null): string {
-  if (!binding) return QA_HOTKEY_DISABLED_ID;
-  const sortedMods = [...binding.modifiers].map(m => m.toLowerCase()).sort();
-  const match = QA_HOTKEY_PRESETS.find(p => {
-    const pMods = [...p.binding.modifiers].sort();
-    return p.binding.primary === binding.primary
-      && pMods.length === sortedMods.length
-      && pMods.every((m, i) => m === sortedMods[i]);
-  });
-  // 后端如果当前绑定是非预设值，UI 兜底回到默认 cmd+shift+;
-  return match ? match.id : QA_HOTKEY_PRESETS[0].id;
-}
-
 function RecordingSection() {
   const { t } = useTranslation();
   const { prefs, capability, updatePrefs: savePrefs } = useHotkeySettings();
@@ -185,24 +152,6 @@ function RecordingSection() {
     savePrefs({ ...prefs, showCapsule });
   const onRestoreClipboardChange = (restoreClipboardAfterPaste: boolean) =>
     savePrefs({ ...prefs, restoreClipboardAfterPaste });
-  const onQaHotkeyChange = async (id: string) => {
-    if (id === QA_HOTKEY_DISABLED_ID) {
-      await savePrefs({ ...prefs, qaHotkey: null });
-      return;
-    }
-    const preset = QA_HOTKEY_PRESETS.find(p => p.id === id);
-    if (!preset) return;
-    // 同步两条路：set_qa_hotkey 让后端立刻重装 hotkey 监听；
-    // savePrefs 让 UserPreferences 落盘。两个 IPC 由后端决定能否合并。
-    try {
-      await setQaHotkey(preset.binding);
-    } catch (error) {
-      console.error('[settings] failed to set qa hotkey', error);
-    }
-    await savePrefs({ ...prefs, qaHotkey: preset.binding });
-  };
-  const onQaSaveHistoryChange = (qaSaveHistory: boolean) =>
-    savePrefs({ ...prefs, qaSaveHistory });
 
   const choices: Array<[HotkeyMode, string]> = [
     ['toggle', t('settings.recording.modeToggle')],
@@ -279,33 +228,6 @@ function RecordingSection() {
         desc={t('settings.recording.restoreClipboardDesc')}
       >
         <Toggle on={prefs.restoreClipboardAfterPaste} onToggle={onRestoreClipboardChange} />
-      </SettingRow>
-      <SettingRow
-        label={t('settings.recording.qaHotkeyLabel')}
-        desc={t('settings.recording.qaHotkeyDesc')}
-      >
-        <select
-          value={bindingToPresetId(prefs.qaHotkey)}
-          onChange={e => { void onQaHotkeyChange(e.target.value); }}
-          style={{
-            ...inputStyle,
-            maxWidth: 220,
-            fontFamily: 'var(--ol-font-mono)',
-          }}
-        >
-          {QA_HOTKEY_PRESETS.map(p => (
-            <option key={p.id} value={p.id}>{p.label}</option>
-          ))}
-          <option value={QA_HOTKEY_DISABLED_ID}>
-            {t('settings.recording.qaHotkeyOptionDisabled')}
-          </option>
-        </select>
-      </SettingRow>
-      <SettingRow
-        label={t('settings.recording.qaSaveHistoryLabel')}
-        desc={t('settings.recording.qaSaveHistoryDesc')}
-      >
-        <Toggle on={prefs.qaSaveHistory} onToggle={onQaSaveHistoryChange} />
       </SettingRow>
       {capability.statusHint && (
         <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.5 }}>
