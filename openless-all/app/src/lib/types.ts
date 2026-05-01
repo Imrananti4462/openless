@@ -71,6 +71,14 @@ export interface HotkeyStatus {
   lastError: HotkeyInstallError | null;
 }
 
+/** 划词语音问答快捷键绑定。null 表示未启用。详见 issue #118。 */
+export interface QaHotkeyBinding {
+  /** 主键（去掉所有修饰符的字面字符），例如 ";" / "/" / "a" */
+  primary: string;
+  /** 修饰符列表，元素小写："cmd" | "shift" | "option" | "ctrl"。 */
+  modifiers: string[];
+}
+
 export interface UserPreferences {
   hotkey: HotkeyBinding;
   defaultMode: PolishMode;
@@ -85,6 +93,24 @@ export interface UserPreferences {
   workingLanguages: string[];
   /** 翻译模式目标语言（单选，原生名）；空串 = 不启用 Shift 翻译。详见 issue #4。 */
   translationTargetLanguage: string;
+  /** 划词语音问答快捷键。null = 未启用。详见 issue #118。 */
+  qaHotkey: QaHotkeyBinding | null;
+  /** 是否把 Q&A 历史写到本地存档。详见 issue #118。 */
+  qaSaveHistory: boolean;
+}
+
+/** Rust 通过 `qa:state` 事件下发的 payload。
+ *  与 issue #118 的契约一致——字段名采用 snake_case，与后端 JSON 直接对齐。 */
+export type QaStateKind = 'loading' | 'answer' | 'error';
+
+export interface QaStatePayload {
+  kind: QaStateKind;
+  /** loading 状态下的选区前缀（前 60 字，已截断）。 */
+  selection_preview?: string;
+  /** answer 状态下的 markdown 字符串。 */
+  answer_md?: string;
+  /** error 状态下的错误提示。 */
+  error?: string;
 }
 
 /** 内置语言列表 — 前端 Settings UI 用，后端只接收原生名字符串拼 prompt。

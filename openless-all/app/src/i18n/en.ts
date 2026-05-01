@@ -34,6 +34,15 @@ export const en: typeof zhCN = {
     inserted: 'Inserted {{count}}',
     translating: 'Translating',
   },
+  qa: {
+    thinking: 'Thinking…',
+    error: 'Something went wrong. Please try again.',
+    errorRetry: 'Retry',
+    pinTooltip: 'Pin (stay open)',
+    unpinTooltip: 'Unpin',
+    closeTooltip: 'Close',
+    selectionPreview: 'From selected text:',
+  },
   nav: {
     overview: 'Overview',
     history: 'History',
@@ -219,6 +228,11 @@ export const en: typeof zhCN = {
       capsuleDesc: 'Show a translucent capsule at the bottom of the screen while recording / transcribing.',
       restoreClipboardLabel: 'Restore clipboard after insert',
       restoreClipboardDesc: 'Windows / Linux only: restore your original clipboard after a successful paste (default on). Turn off to keep the dictation text in the clipboard so you can manually Ctrl+V if the simulated paste did not actually land. See issue #111.',
+      qaHotkeyLabel: 'Question-mode hotkey',
+      qaHotkeyDesc: 'Select some text, press this hotkey to open the QA panel and start recording; press again to stop and get the answer. See issue #118.',
+      qaHotkeyOptionDisabled: 'Disabled',
+      qaSaveHistoryLabel: 'Save Q&A history',
+      qaSaveHistoryDesc: 'Persist each question and answer to local storage. Turn off to leave no trace.',
     },
     providers: {
       llmTitle: 'LLM (polishing)',

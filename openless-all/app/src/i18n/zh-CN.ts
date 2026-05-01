@@ -32,6 +32,15 @@ export const zhCN = {
     inserted: '已插入 {{count}}',
     translating: '正在翻译',
   },
+  qa: {
+    thinking: '思考中…',
+    error: '出错了，请稍后再试。',
+    errorRetry: '重试',
+    pinTooltip: '固定（不自动关闭）',
+    unpinTooltip: '取消固定',
+    closeTooltip: '关闭',
+    selectionPreview: '基于选中文本：',
+  },
   nav: {
     overview: '概览',
     history: '历史',
@@ -217,6 +226,11 @@ export const zhCN = {
       capsuleDesc: '录音 / 转写时在屏幕底部显示半透明胶囊。',
       restoreClipboardLabel: '插入后恢复剪贴板',
       restoreClipboardDesc: '仅 Windows / Linux：粘贴成功后恢复你原来的剪贴板内容（默认开）。关掉就把听写文本留在剪贴板，模拟粘贴没真正落地时可以手动 Ctrl+V 找回。详见 issue #111。',
+      qaHotkeyLabel: '提问模式快捷键',
+      qaHotkeyDesc: '选中一段文字后按下此快捷键，弹出问答浮窗并开始录音；再按一次结束录音、生成答案。详见 issue #118。',
+      qaHotkeyOptionDisabled: '不启用',
+      qaSaveHistoryLabel: '保存 Q&A 历史',
+      qaSaveHistoryDesc: '把每次划词问答的问题与答案写入本地存档。关闭则不保留任何痕迹。',
     },
     providers: {
       llmTitle: 'LLM 模型（润色）',
