@@ -404,6 +404,8 @@ function ProviderTools({ kind, modelAccount, onModelSelected }: { kind: 'llm' | 
   };
 
   const validate = async () => {
+    setModels([]);
+    setSelectedModel('');
     setResult('loading', t('settings.providers.validating'));
     try {
       const result = await validateProviderCredentials(kind);
@@ -436,9 +438,15 @@ function ProviderTools({ kind, modelAccount, onModelSelected }: { kind: 'llm' | 
   };
 
   const applyModel = async (model: string) => {
-    setSelectedModel(model);
-    await setCredential(modelAccount, model);
-    onModelSelected();
+    setResult('loading', t('common.saving'));
+    try {
+      await setCredential(modelAccount, model);
+      setSelectedModel(model);
+      onModelSelected();
+      setResult('success', t('settings.providers.modelSaved', { model }));
+    } catch (error) {
+      setResult('error', providerErrorMessage(error, t));
+    }
   };
 
   return (
@@ -451,6 +459,7 @@ function ProviderTools({ kind, modelAccount, onModelSelected }: { kind: 'llm' | 
             <select
               value={selectedModel}
               onChange={e => applyModel(e.target.value)}
+              disabled={status === 'loading'}
               style={{ ...inputStyle, maxWidth: 220 }}
             >
               <option value="" disabled>{t('settings.providers.selectModel')}</option>
