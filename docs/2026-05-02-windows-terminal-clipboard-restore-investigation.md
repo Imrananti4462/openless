@@ -76,6 +76,76 @@ Interpretation:
 
 This isolates the bug to clipboard restore timing, independent of ASR, polish, QA hotkey, or selection logic.
 
+### 3. Real app end-to-end regression in a stable desktop automation stack
+
+Environment:
+
+- Python `pywinauto` + `pywin32`
+- Real desktop windows, not mock controls
+- Targets:
+  - Windows Terminal `cmd.exe` tab
+  - Windows Terminal `PowerShell` tab
+  - Notepad
+
+Method:
+
+- Put a command or text payload into the real Windows clipboard
+- Send synthetic `Ctrl+V`
+- Wait either `150ms` or `750ms`
+- Restore the previous clipboard
+- Verify the target app actually received the intended payload
+
+Observed outputs:
+
+```json
+[
+  {
+    "target": "Windows Terminal CMD",
+    "restoreDelayMs": 150,
+    "expected": "CMD_150_OK",
+    "succeeded": true
+  },
+  {
+    "target": "Windows Terminal CMD",
+    "restoreDelayMs": 750,
+    "expected": "CMD_750_OK",
+    "succeeded": true
+  },
+  {
+    "target": "Windows Terminal PowerShell",
+    "restoreDelayMs": 150,
+    "expected": "POWERSHELL_150_OK",
+    "succeeded": true
+  },
+  {
+    "target": "Windows Terminal PowerShell",
+    "restoreDelayMs": 750,
+    "expected": "POWERSHELL_750_OK",
+    "succeeded": true
+  },
+  {
+    "target": "Notepad",
+    "restoreDelayMs": 150,
+    "expected": "NOTEPAD_150_OK",
+    "succeeded": true
+  },
+  {
+    "target": "Notepad",
+    "restoreDelayMs": 750,
+    "expected": "NOTEPAD_750_OK",
+    "succeeded": true
+  }
+]
+```
+
+Interpretation:
+
+- the isolated clipboard/paste/restore harness does **not** reproduce the stale-paste bug on the current Windows Terminal `CMD` tab
+- it also does **not** reproduce it on the current Windows Terminal `PowerShell` tab
+- Notepad behaves as expected in both timing windows
+- therefore the user-reported failure is not a blanket “all terminal paste on Windows fails at 150ms” statement
+- the failure requires an additional condition beyond “target is a terminal”, such as a slower paste consumer, extra lifecycle delay, or OpenLess-specific sequencing around focus restoration and session completion
+
 ## Root cause
 
 Root cause: Windows `PasteSent` semantics were treated as if they implied paste completion.
@@ -84,6 +154,7 @@ Root cause: Windows `PasteSent` semantics were treated as if they implied paste 
 - it does not mean the target application has already read clipboard contents
 - terminal-style targets can consume the clipboard later than standard text inputs
 - restoring the old clipboard at a fixed `150ms` can therefore race ahead of actual paste consumption
+- current real-app regression suggests this is conditional, not universal: some terminal sessions consume quickly enough to beat `150ms`, while slower consumers still fail
 
 Classification:
 
@@ -122,20 +193,22 @@ Observed result:
 - compile/check passed
 - test binaries compiled
 - new smoke scripts parse successfully
+- real desktop automation passed on:
+  - Windows Terminal `CMD` tab at `150ms` and `750ms`
+  - Windows Terminal `PowerShell` tab at `150ms` and `750ms`
+  - Notepad at `150ms` and `750ms`
 
 ## Remaining gap
 
-Still needed on a fully interactive Windows desktop:
+Still needed if we want to exactly mirror the original user report:
 
-- `Windows Terminal`
-- `PowerShell`
-- `CMD`
-- `Notepad`
-
-Goal:
-
-- confirm that the real terminal input line reproduces under the old restore timing
-- confirm the patched build no longer pastes stale clipboard content
+- drive **OpenLess itself** through the full dictation lifecycle in the same run
+- keep the target specifically in the same terminal/input setup where the stale paste was originally observed
+- capture whether the failing case depends on:
+  - OpenLess focus-target restore timing
+  - ASR/polish latency
+  - the exact terminal host/session state
+  - another app-specific delay not present in the isolated paste harness
 
 ## Suggested issue / PR title
 
