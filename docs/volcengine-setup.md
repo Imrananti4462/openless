@@ -19,6 +19,12 @@
 
 4. 复制到 OpenLess 的 `Settings` 页面
 
+   打开：
+
+   `Settings -> Providers -> ASR`
+
+   ![复制到 OpenLess 的 Settings 页面](./images/volcengine-setup/04-openless-settings.png)
+
    填这两个：
 
    - `APP ID`
@@ -27,4 +33,3 @@
    不用填：
 
    - `Secret Key`
-
