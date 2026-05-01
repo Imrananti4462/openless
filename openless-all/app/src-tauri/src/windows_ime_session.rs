@@ -53,14 +53,14 @@ impl PreparedWindowsImeSession {
 
 pub struct WindowsImeSessionController {
     profile_manager: WindowsImeProfileManager,
-    ipc_server: WindowsImeIpcServer,
+    ipc: WindowsImeIpcServer,
 }
 
 impl WindowsImeSessionController {
     pub fn new() -> Self {
         Self {
             profile_manager: WindowsImeProfileManager::new(),
-            ipc_server: WindowsImeIpcServer::new(),
+            ipc: WindowsImeIpcServer::new(),
         }
     }
 
@@ -101,11 +101,13 @@ impl WindowsImeSessionController {
         request: ImeSubmitRequest,
     ) -> Result<InsertStatus, WindowsImeSessionError> {
         if !prepared.is_ready_for_tsf_submit() {
-            return Ok(InsertStatus::CopiedFallback);
+            return Err(WindowsImeSessionError::Ipc(
+                "OpenLess IME session is not active".to_string(),
+            ));
         }
 
         let status = self
-            .ipc_server
+            .ipc
             .submit_text(request)
             .await
             .map_err(|error| WindowsImeSessionError::Ipc(error.to_string()))?;
@@ -165,5 +167,24 @@ mod tests {
         assert!(!should_fallback_after_ime_result(
             ImeSubmitStatus::Committed
         ));
+    }
+
+    #[tokio::test]
+    async fn submit_prepared_reports_unavailable_session() {
+        let controller = WindowsImeSessionController::new();
+        let result = controller
+            .submit_prepared(
+                &PreparedWindowsImeSession::unavailable(),
+                ImeSubmitRequest {
+                    session_id: "session-1".to_string(),
+                    text: "hello".to_string(),
+                    created_at: "2026-05-01T12:00:00Z".to_string(),
+                },
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(WindowsImeSessionError::Ipc(message)) if message == "OpenLess IME session is not active")
+        );
     }
 }
