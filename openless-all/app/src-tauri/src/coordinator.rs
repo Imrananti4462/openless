@@ -555,6 +555,23 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
 
         if let Err(e) = asr.open_session().await {
             log::error!("[coord] open ASR session failed: {e}");
+            match startup_race_status_for_starting(inner, current_session_id) {
+                StartupRaceStatus::StaleContinuation => {
+                    log::info!(
+                        "[coord] stale ASR open_session error from session {current_session_id} — ignoring"
+                    );
+                    asr.cancel();
+                    restore_prepared_windows_ime_session(inner, current_session_id);
+                    return Ok(());
+                }
+                StartupRaceStatus::CancelRaced => {
+                    asr.cancel();
+                    restore_prepared_windows_ime_session(inner, current_session_id);
+                    set_phase_idle_if_session_matches(inner, current_session_id);
+                    return Ok(());
+                }
+                StartupRaceStatus::ActiveStarting => {}
+            }
             if let Some(rec) = inner.recorder.lock().take() {
                 rec.stop();
             }
@@ -563,11 +580,6 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
                     ActiveAsr::Volcengine(v) => v.cancel(),
                     ActiveAsr::Whisper(w) => w.cancel(),
                 }
-            }
-            if cancel_raced_during_starting(inner) {
-                restore_prepared_windows_ime_session(inner, current_session_id);
-                inner.state.lock().phase = SessionPhase::Idle;
-                return Ok(());
             }
             emit_capsule(
                 inner,
@@ -578,22 +590,33 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
                 None,
             );
             restore_prepared_windows_ime_session(inner, current_session_id);
-            inner.state.lock().phase = SessionPhase::Idle;
+            set_phase_idle_if_session_matches(inner, current_session_id);
             schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
             return Err(e.to_string());
         }
         // open_session.await 期间用户可能按了 Esc / 改变心意。如果 cancel_session
         // 已触发（cancelled=true 或 phase 被改回 Idle），别再装 ASR，直接善后。
         // audit HIGH #1。
-        if cancel_raced_during_starting(inner) {
-            log::info!("[coord] cancel raced during ASR open_session — aborting begin");
-            asr.cancel();
-            if let Some(rec) = inner.recorder.lock().take() {
-                rec.stop();
+        match startup_race_status_for_starting(inner, current_session_id) {
+            StartupRaceStatus::ActiveStarting => {}
+            StartupRaceStatus::CancelRaced => {
+                log::info!("[coord] cancel raced during ASR open_session — aborting begin");
+                asr.cancel();
+                if let Some(rec) = inner.recorder.lock().take() {
+                    rec.stop();
+                }
+                restore_prepared_windows_ime_session(inner, current_session_id);
+                set_phase_idle_if_session_matches(inner, current_session_id);
+                return Ok(());
             }
-            restore_prepared_windows_ime_session(inner, current_session_id);
-            inner.state.lock().phase = SessionPhase::Idle;
-            return Ok(());
+            StartupRaceStatus::StaleContinuation => {
+                log::info!(
+                    "[coord] stale ASR open_session continuation from session {current_session_id} — ignoring"
+                );
+                asr.cancel();
+                restore_prepared_windows_ime_session(inner, current_session_id);
+                return Ok(());
+            }
         }
         let target: Arc<dyn crate::asr::AudioConsumer> = asr;
         let flushed_bytes = bridge.attach(target);
@@ -764,7 +787,9 @@ async fn finish_starting_session(inner: &Arc<Inner>, session_id: u64) {
     // 反向覆盖回 Listening → 用户的 cancel 边沿被吞掉。
     let outcome = {
         let mut state = inner.state.lock();
-        if state.cancelled || state.phase != SessionPhase::Starting {
+        if state.session_id != session_id {
+            BeginOutcome::StaleContinuation
+        } else if state.cancelled || state.phase != SessionPhase::Starting {
             BeginOutcome::CancelRaced
         } else {
             state.phase = SessionPhase::Listening;
@@ -777,6 +802,12 @@ async fn finish_starting_session(inner: &Arc<Inner>, session_id: u64) {
         }
     };
     match outcome {
+        BeginOutcome::StaleContinuation => {
+            log::info!(
+                "[coord] stale recorder/ASR startup continuation from session {session_id} — ignoring"
+            );
+            restore_prepared_windows_ime_session(inner, session_id);
+        }
         BeginOutcome::CancelRaced => {
             log::info!("[coord] cancel raced during recorder/ASR startup — aborting begin");
             if let Some(rec) = inner.recorder.lock().take() {
@@ -789,7 +820,7 @@ async fn finish_starting_session(inner: &Arc<Inner>, session_id: u64) {
                 }
             }
             restore_prepared_windows_ime_session(inner, session_id);
-            inner.state.lock().phase = SessionPhase::Idle;
+            set_phase_idle_if_session_matches(inner, session_id);
         }
         BeginOutcome::Started | BeginOutcome::PendingStop => {
             log::info!("[coord] session started");
@@ -1513,6 +1544,19 @@ mod tests {
         assert!(take_matching_prepared_windows_ime_session(&mut slot, 2).is_some());
         assert!(slot.is_none());
     }
+
+    #[test]
+    fn startup_race_check_treats_newer_session_as_stale() {
+        let mut state = SessionState::default();
+        state.phase = SessionPhase::Starting;
+        state.cancelled = false;
+        state.session_id = 2;
+
+        assert_eq!(
+            startup_race_status(&state, 1),
+            StartupRaceStatus::StaleContinuation
+        );
+    }
 }
 
 fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {
@@ -1532,6 +1576,8 @@ const CAPSULE_AUTO_HIDE_DELAY_MS: u64 = 2000;
 
 /// begin_session 中各 await 之间的 cancel race 检查结果。
 enum BeginOutcome {
+    /// 启动 continuation 属于旧 session；不能改动当前 session 状态。
+    StaleContinuation,
     /// 正常进入 Listening。
     Started,
     /// Starting 阶段积累了 pending_stop 边沿，应立即 end_session（hold 快速松开 / toggle 快速双击）。
@@ -1541,12 +1587,39 @@ enum BeginOutcome {
     CancelRaced,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartupRaceStatus {
+    ActiveStarting,
+    CancelRaced,
+    StaleContinuation,
+}
+
+fn startup_race_status(state: &SessionState, captured_session_id: u64) -> StartupRaceStatus {
+    if state.session_id != captured_session_id {
+        StartupRaceStatus::StaleContinuation
+    } else if state.cancelled || state.phase != SessionPhase::Starting {
+        StartupRaceStatus::CancelRaced
+    } else {
+        StartupRaceStatus::ActiveStarting
+    }
+}
+
 /// 检查 begin_session 的 await 间隙是否被 cancel_session 打断。
 /// 必须在持有 state lock 的瞬间读，结果一拿就过期，所以用 helper 名字提醒只在
 /// 「准备做下一步副作用前」用。
-fn cancel_raced_during_starting(inner: &Arc<Inner>) -> bool {
+fn startup_race_status_for_starting(
+    inner: &Arc<Inner>,
+    captured_session_id: u64,
+) -> StartupRaceStatus {
     let state = inner.state.lock();
-    state.cancelled || state.phase != SessionPhase::Starting
+    startup_race_status(&state, captured_session_id)
+}
+
+fn set_phase_idle_if_session_matches(inner: &Arc<Inner>, session_id: u64) {
+    let mut state = inner.state.lock();
+    if state.session_id == session_id {
+        state.phase = SessionPhase::Idle;
+    }
 }
 
 fn schedule_capsule_idle(inner: &Arc<Inner>, delay_ms: u64) {
