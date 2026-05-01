@@ -411,7 +411,7 @@ fn compose_system_prompt(mode: PolishMode, hotwords: &[String]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "{}\n\n热词（用户提供的正确写法，仅当原始转写明显是其误识别时才纠正，不做机械替换）：\n{}",
+        "{}\n\n热词（用户希望以下写法在输出中保持准确；当转写中出现这些词的同音 / 近形误识别时，优先按上述写法输出，不做无关词的机械替换）：\n{}",
         base, bullets
     )
 }
@@ -887,5 +887,15 @@ mod tests {
 
         // 防回归：旧版"另外："标签写法不能再出现在示例输出里。
         assert!(!prompt.contains("另外：检查一下当前还有哪些 issues"));
+    }
+
+    #[test]
+    fn compose_system_prompt_prefers_correct_spelling_for_hotwords() {
+        let prompt = compose_system_prompt(PolishMode::Light, &["GitHub".into(), "OpenLess".into()]);
+
+        assert!(prompt.contains("用户希望以下写法在输出中保持准确"));
+        assert!(prompt.contains("同音 / 近形误识别时，优先按上述写法输出"));
+        assert!(prompt.contains("- GitHub"));
+        assert!(prompt.contains("- OpenLess"));
     }
 }

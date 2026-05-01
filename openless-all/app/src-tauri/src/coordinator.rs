@@ -111,6 +111,9 @@ struct Inner {
     qa_hotkey: Mutex<Option<QaHotkeyMonitor>>,
     /// QA 单独的 session 状态，与 dictation 的 SessionPhase 不冲突。
     qa_state: Mutex<QaSessionState>,
+    /// 最近一次应用到 capsule 窗口的几何状态。避免录音 level tick 反复触发
+    /// resize / reposition。
+    capsule_layout: Mutex<Option<CapsuleLayoutState>>,
     /// QA 用的 ASR 句柄（始终是 Volcengine 流式）。
     qa_asr: Mutex<Option<Arc<VolcengineStreamingASR>>>,
     /// QA 用的 Recorder 句柄。
@@ -181,6 +184,7 @@ impl Coordinator {
                 translation_modifier_seen: AtomicBool::new(false),
                 qa_hotkey: Mutex::new(None),
                 qa_state: Mutex::new(QaSessionState::default()),
+                capsule_layout: Mutex::new(None),
                 qa_asr: Mutex::new(None),
                 qa_recorder: Mutex::new(None),
             }),
@@ -2451,6 +2455,7 @@ fn emit_capsule(
     let show_capsule = inner.prefs.get().show_capsule;
     if let Some(window) = app.get_webview_window("capsule") {
         let visible = !matches!(state, CapsuleState::Idle);
+        maybe_position_capsule_bottom_center(inner, &window, payload.translation);
         if show_capsule && visible {
             if cfg!(target_os = "windows") {
                 if !show_capsule_window_no_activate() {
@@ -2469,6 +2474,45 @@ fn emit_capsule(
     }
 
     let _ = app.emit_to("capsule", "capsule:state", payload);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CapsuleLayoutState {
+    translation_active: bool,
+    monitor_x: i32,
+    monitor_y: i32,
+    monitor_width: u32,
+    monitor_height: u32,
+    scale_bits: u64,
+}
+
+fn maybe_position_capsule_bottom_center<R: tauri::Runtime>(
+    inner: &Arc<Inner>,
+    window: &tauri::WebviewWindow<R>,
+    translation_active: bool,
+) {
+    let Some(monitor) = window.current_monitor().ok().flatten() else {
+        return;
+    };
+    let next = CapsuleLayoutState {
+        translation_active,
+        monitor_x: monitor.position().x,
+        monitor_y: monitor.position().y,
+        monitor_width: monitor.size().width,
+        monitor_height: monitor.size().height,
+        scale_bits: monitor.scale_factor().to_bits(),
+    };
+    {
+        let last = inner.capsule_layout.lock();
+        if last.as_ref() == Some(&next) {
+            return;
+        }
+    }
+    if crate::position_capsule_bottom_center(window, translation_active).is_ok() {
+        let mut last = inner.capsule_layout.lock();
+        *last = Some(next);
+        return;
+    }
 }
 
 // ─────────────────────────── audio bridge ───────────────────────────

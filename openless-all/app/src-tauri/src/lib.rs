@@ -35,7 +35,7 @@ use std::time::Duration;
 static QA_WINDOW_POSITIONED: AtomicBool = AtomicBool::new(false);
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, LogicalPosition, Manager, RunEvent, Runtime};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, RunEvent, Runtime};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -61,7 +61,7 @@ pub fn run() {
             // Capsule 启动时定位到屏幕底部居中并隐藏；coordinator 按需显示。
             // 与 Swift `CapsuleWindowController.repositionToBottomCenter` 同语义。
             if let Some(capsule) = app.get_webview_window("capsule") {
-                if let Err(e) = position_capsule_bottom_center(&capsule) {
+                if let Err(e) = position_capsule_bottom_center(&capsule, false) {
                     log::warn!("[capsule] position failed: {e}");
                 }
                 let _ = capsule.hide();
@@ -436,8 +436,6 @@ const QA_WINDOW_WIDTH: f64 = 380.0;
 const QA_WINDOW_HEIGHT: f64 = 440.0;
 /// 胶囊与 QA 窗口的间距，与设计稿一致。
 const QA_WINDOW_GAP_TO_CAPSULE: f64 = 8.0;
-/// 胶囊高度（与 `position_capsule_bottom_center` 中一致）。
-const CAPSULE_HEIGHT_FOR_QA: f64 = 96.0;
 /// 给 macOS Dock 留的下边距（与 capsule 同源）。
 const DOCK_BOTTOM_PADDING_FOR_QA: f64 = 80.0;
 
@@ -452,10 +450,11 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
     let size = monitor.size();
     let logical_w = size.width as f64 / scale;
     let logical_h = size.height as f64 / scale;
+    let capsule_height = capsule_window_size(false).1;
     let x = ((logical_w - QA_WINDOW_WIDTH) / 2.0).max(0.0);
     let y = (logical_h
         - DOCK_BOTTOM_PADDING_FOR_QA
-        - CAPSULE_HEIGHT_FOR_QA
+        - capsule_height
         - QA_WINDOW_GAP_TO_CAPSULE
         - QA_WINDOW_HEIGHT)
         .max(0.0);
@@ -563,21 +562,75 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
 
 /// 把 capsule 窗口移到屏幕底部居中，与 Swift `CapsuleWindowController.repositionToBottomCenter` 同效。
 /// 留 80pt 给 macOS Dock；Windows 任务栏一般在底部 48pt 以内，整体也合适。
-fn position_capsule_bottom_center<R: tauri::Runtime>(
+pub(crate) fn position_capsule_bottom_center<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
+    translation_active: bool,
 ) -> tauri::Result<()> {
     let monitor = match window.current_monitor()? {
         Some(m) => m,
         None => return Ok(()),
     };
+    let (cap_w, cap_h) = capsule_window_size(translation_active);
+    window.set_size(LogicalSize::new(cap_w, cap_h))?;
+
     let scale = monitor.scale_factor();
     let size = monitor.size();
     let logical_w = size.width as f64 / scale;
     let logical_h = size.height as f64 / scale;
-    let cap_w = 220.0_f64;
-    let cap_h = 96.0_f64;
     let x = ((logical_w - cap_w) / 2.0).max(0.0);
     let y = (logical_h - cap_h - 80.0).max(0.0);
     window.set_position(LogicalPosition::new(x, y))?;
     Ok(())
+}
+
+fn capsule_window_size(translation_active: bool) -> (f64, f64) {
+    #[cfg(target_os = "windows")]
+    {
+        let height = if translation_active { 110.0 } else { 52.0 };
+        (196.0, height)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let height = if translation_active { 110.0 } else { 42.0 };
+        (176.0, height)
+    }
+}
+
+fn capsule_height_for_qa() -> f64 {
+    capsule_window_size(false).1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{capsule_height_for_qa, capsule_window_size};
+
+    #[test]
+    fn capsule_window_size_matches_visible_pill_when_not_translating() {
+        let (width, height) = capsule_window_size(false);
+        #[cfg(target_os = "windows")]
+        assert_eq!((width, height), (196.0, 52.0));
+
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!((width, height), (176.0, 42.0));
+    }
+
+    #[test]
+    fn capsule_window_size_expands_for_translation_badge() {
+        let (width, height) = capsule_window_size(true);
+        #[cfg(target_os = "windows")]
+        assert_eq!((width, height), (196.0, 110.0));
+
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!((width, height), (176.0, 110.0));
+    }
+
+    #[test]
+    fn qa_anchor_uses_normal_capsule_height_source() {
+        #[cfg(target_os = "windows")]
+        assert_eq!(capsule_height_for_qa(), 52.0);
+
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(capsule_height_for_qa(), 42.0);
+    }
 }
