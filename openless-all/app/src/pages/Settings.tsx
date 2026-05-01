@@ -272,7 +272,7 @@ const LLM_PRESETS = [
 
 type LlmPresetId = typeof LLM_PRESETS[number]['id'];
 
-const ASR_DEFAULT_RESOURCE_ID = 'volc.bigasr.sauc.duration';
+const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 
 // SiliconFlow ASR 暂未在后端实现（coordinator.rs 只路由 whisper / volcengine）。
 // 在后端接入前不暴露给用户，避免选了之后必然失败。重新启用见 issue #58 的 follow-up。
@@ -550,8 +550,8 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
     statusRef.current = window.setTimeout(() => setStatus('idle'), 1600);
   };
 
-  const save = async (v: string) => {
-    if (!loaded || !dirty) return;
+  const save = async (v: string, force = false) => {
+    if (!loaded || (!dirty && !force)) return;
     setStatus('saving');
     try {
       await setCredential(account, v);
@@ -569,7 +569,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
     if (!loaded) return;
     setDirty(true);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => save(v), 300);
+    debounceRef.current = setTimeout(() => save(v, true), 300);
   };
 
   const onBlur = () => {
@@ -578,14 +578,14 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
-    save(value);
+    save(value, true);
   };
 
   const fillDefault = async () => {
     if (!loaded || !defaultValue) return;
     setValue(defaultValue);
     setDirty(true);
-    await save(defaultValue);
+    await save(defaultValue, true);
   };
 
   const onCopy = async () => {
