@@ -1,0 +1,143 @@
+# Windows terminal clipboard restore investigation (2026-05-02)
+
+Scope: `openless-all/app/src-tauri/src/insertion.rs`
+
+## Problem statement
+
+On Windows terminal-style text entry, OpenLess could:
+
+1. put the new dictated text into the clipboard
+2. send `Ctrl+V`
+3. restore the old clipboard too early
+4. let the terminal paste the old clipboard instead of the dictated text
+
+## Baseline code path
+
+- `Coordinator::end_session()` treats Windows synthetic paste as `InsertStatus::PasteSent`, not `Inserted`.
+- `TextInserter::insert()` calls `insert_with_clipboard_restore()`.
+- Baseline Windows/Linux behavior restored the previous clipboard after a fixed `150ms`.
+- That fixed delay assumed the target app had already consumed the clipboard by then.
+
+## Automated evidence
+
+### 1. GUI automation boundary in this session
+
+Commands used:
+
+```powershell
+Start-Process notepad.exe -PassThru
+Start-Process cmd.exe -PassThru
+EnumWindows(...)
+```
+
+Observed result:
+
+- `explorer.exe` exists in `SessionId=1`
+- newly started `notepad.exe`, `cmd.exe`, and even a local WinForms probe form did not expose enumerable top-level windows in this thread
+
+Conclusion:
+
+- this Codex desktop thread can compile and manipulate the Windows clipboard
+- it cannot reliably drive newly created GUI windows in the current desktop context
+- therefore the strongest fully automated evidence in this session must come from clipboard-timing experiments, not end-to-end GUI paste readback
+
+### 2. Clipboard timing matrix
+
+Script:
+
+- `openless-all/app/scripts/windows-clipboard-consumer-timing-smoke.ps1`
+
+Command:
+
+```powershell
+$cases = @(
+  @{ consumer = 50; restore = 150 },
+  @{ consumer = 250; restore = 150 },
+  @{ consumer = 250; restore = 750 }
+)
+foreach ($case in $cases) {
+  powershell -ExecutionPolicy Bypass -File openless-all/app/scripts/windows-clipboard-consumer-timing-smoke.ps1 -ConsumerDelayMs $case.consumer -RestoreDelayMs $case.restore
+}
+```
+
+Observed outputs:
+
+```json
+{"consumerDelayMs":50,"restoreDelayMs":150,"insertedText":"OPENLESS_DICTATED_TEXT","previousText":"OPENLESS_OLDER_CLIPBOARD","observedText":"OPENLESS_DICTATED_TEXT","matchedInserted":true}
+{"consumerDelayMs":250,"restoreDelayMs":150,"insertedText":"OPENLESS_DICTATED_TEXT","previousText":"OPENLESS_OLDER_CLIPBOARD","observedText":"OPENLESS_OLDER_CLIPBOARD","matchedInserted":false}
+{"consumerDelayMs":250,"restoreDelayMs":750,"insertedText":"OPENLESS_DICTATED_TEXT","previousText":"OPENLESS_OLDER_CLIPBOARD","observedText":"OPENLESS_DICTATED_TEXT","matchedInserted":true}
+```
+
+Interpretation:
+
+- a fast consumer (`50ms`) succeeds with the old `150ms` restore window
+- a slower consumer (`250ms`) fails with the old `150ms` restore window
+- the same slower consumer succeeds once restore is delayed to `750ms`
+
+This isolates the bug to clipboard restore timing, independent of ASR, polish, QA hotkey, or selection logic.
+
+## Root cause
+
+Root cause: Windows `PasteSent` semantics were treated as if they implied paste completion.
+
+- `PasteSent` only means OpenLess sent synthetic `Ctrl+V`
+- it does not mean the target application has already read clipboard contents
+- terminal-style targets can consume the clipboard later than standard text inputs
+- restoring the old clipboard at a fixed `150ms` can therefore race ahead of actual paste consumption
+
+Classification:
+
+- primary layer: `clipboard lifecycle`
+- secondary layer: `insertion lifecycle`
+- not primary: `focus restore`
+- manifestation: terminal-specific and likely any slower Windows paste consumer
+- not evidence of a global Windows clipboard bug by itself
+
+## Fix applied
+
+File:
+
+- `openless-all/app/src-tauri/src/insertion.rs`
+
+Change:
+
+- Windows clipboard restore delay changed from `150ms` to `750ms`
+- restore now runs on a background thread instead of blocking the insert path
+- Linux keeps the previous `150ms` behavior
+
+## Verification run
+
+Commands:
+
+```powershell
+cargo fmt --all
+cargo check --lib
+cargo test --lib --no-run
+cargo check --tests
+powershell -NoProfile -Command "[void][scriptblock]::Create((Get-Content -Raw 'openless-all/app/scripts/windows-clipboard-consumer-timing-smoke.ps1')); 'script-parse-ok'"
+```
+
+Observed result:
+
+- compile/check passed
+- test binaries compiled
+- new smoke scripts parse successfully
+
+## Remaining gap
+
+Still needed on a fully interactive Windows desktop:
+
+- `Windows Terminal`
+- `PowerShell`
+- `CMD`
+- `Notepad`
+
+Goal:
+
+- confirm that the real terminal input line reproduces under the old restore timing
+- confirm the patched build no longer pastes stale clipboard content
+
+## Suggested issue / PR title
+
+- Issue: `[windows][insertion] terminal paste can restore stale clipboard before synthetic paste lands`
+- PR: `fix(windows): delay clipboard restore after synthetic paste`
