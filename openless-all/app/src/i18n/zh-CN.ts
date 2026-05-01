@@ -242,7 +242,7 @@ export const zhCN = {
       baseUrlLabel: '接口地址',
       modelLabel: '模型',
       appIdLabel: 'App ID（应用 ID）',
-      accessKeyLabel: 'Access Key（访问密钥）',
+      accessKeyLabel: 'Access Key',
       resourceIdLabel: '资源 ID',
       toolsLabel: '连接检查',
       toolsDesc: '先保存上方配置，再验证鉴权或拉取模型；失败时仍可手动填写模型 ID。',
