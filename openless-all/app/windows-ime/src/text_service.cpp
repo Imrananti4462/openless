@@ -5,6 +5,21 @@
 #include "edit_session.h"
 
 extern LONG g_object_count;
+extern HINSTANCE g_module;
+
+namespace {
+
+constexpr wchar_t kMessageWindowClassName[] = L"OpenLessImeMessageWindow";
+constexpr UINT kSubmitTextMessage = WM_APP + 1;
+constexpr UINT kSubmitTextTimeoutMs = 3000;
+
+struct SubmitTextRequest {
+  const std::wstring* session_id = nullptr;
+  const std::wstring* text = nullptr;
+  HRESULT result = E_UNEXPECTED;
+};
+
+}  // namespace
 
 OpenLessTextService::OpenLessTextService() {
   InterlockedIncrement(&g_object_count);
@@ -59,11 +74,19 @@ STDMETHODIMP OpenLessTextService::ActivateEx(ITfThreadMgr* thread_mgr,
 
   Deactivate();
 
+  owner_thread_id_ = GetCurrentThreadId();
+
   thread_mgr_ = thread_mgr;
   thread_mgr_->AddRef();
   client_id_ = client_id;
 
-  const HRESULT hr = StartIpcServer();
+  HRESULT hr = EnsureMessageWindow();
+  if (FAILED(hr)) {
+    Deactivate();
+    return hr;
+  }
+
+  hr = StartIpcServer();
   if (FAILED(hr)) {
     Deactivate();
     return hr;
@@ -74,17 +97,87 @@ STDMETHODIMP OpenLessTextService::ActivateEx(ITfThreadMgr* thread_mgr,
 
 STDMETHODIMP OpenLessTextService::Deactivate() {
   StopIpcServer();
+  DestroyMessageWindow();
 
   if (thread_mgr_ != nullptr) {
     thread_mgr_->Release();
     thread_mgr_ = nullptr;
   }
   client_id_ = TF_CLIENTID_NULL;
+  owner_thread_id_ = 0;
 
   return S_OK;
 }
 
 HRESULT OpenLessTextService::SubmitTextFromPipe(
+    const std::wstring& session_id,
+    const std::wstring& text) {
+  if (GetCurrentThreadId() == owner_thread_id_) {
+    return CommitTextOnOwnerThread(session_id, text);
+  }
+
+  if (message_window_ == nullptr) {
+    return E_UNEXPECTED;
+  }
+
+  SubmitTextRequest request{&session_id, &text, E_UNEXPECTED};
+  DWORD_PTR message_result = 0;
+  const LRESULT sent = SendMessageTimeoutW(
+      message_window_, kSubmitTextMessage, 0,
+      reinterpret_cast<LPARAM>(&request), SMTO_ABORTIFHUNG,
+      kSubmitTextTimeoutMs, &message_result);
+  if (sent == 0) {
+    const DWORD error = GetLastError();
+    return HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error : ERROR_TIMEOUT);
+  }
+
+  return request.result;
+}
+
+HRESULT OpenLessTextService::StartIpcServer() {
+  pipe_server_.Start(this);
+  return S_OK;
+}
+
+void OpenLessTextService::StopIpcServer() {
+  pipe_server_.Stop();
+}
+
+HRESULT OpenLessTextService::EnsureMessageWindow() {
+  if (message_window_ != nullptr) {
+    return S_OK;
+  }
+
+  WNDCLASSW window_class = {};
+  window_class.lpfnWndProc = OpenLessTextService::MessageWindowProc;
+  window_class.hInstance = g_module;
+  window_class.lpszClassName = kMessageWindowClassName;
+
+  if (!RegisterClassW(&window_class)) {
+    const DWORD error = GetLastError();
+    if (error != ERROR_CLASS_ALREADY_EXISTS) {
+      return HRESULT_FROM_WIN32(error);
+    }
+  }
+
+  message_window_ =
+      CreateWindowExW(0, kMessageWindowClassName, L"", 0, 0, 0, 0, 0,
+                      HWND_MESSAGE, nullptr, g_module, this);
+  if (message_window_ == nullptr) {
+    return HRESULT_FROM_WIN32(GetLastError());
+  }
+
+  return S_OK;
+}
+
+void OpenLessTextService::DestroyMessageWindow() {
+  if (message_window_ != nullptr) {
+    DestroyWindow(message_window_);
+    message_window_ = nullptr;
+  }
+}
+
+HRESULT OpenLessTextService::CommitTextOnOwnerThread(
     const std::wstring& session_id,
     const std::wstring& text) {
   UNREFERENCED_PARAMETER(session_id);
@@ -131,8 +224,32 @@ HRESULT OpenLessTextService::SubmitTextFromPipe(
   return edit_result;
 }
 
-HRESULT OpenLessTextService::StartIpcServer() {
-  return S_OK;
-}
+LRESULT CALLBACK OpenLessTextService::MessageWindowProc(HWND window,
+                                                        UINT message,
+                                                        WPARAM wparam,
+                                                        LPARAM lparam) {
+  UNREFERENCED_PARAMETER(wparam);
 
-void OpenLessTextService::StopIpcServer() {}
+  if (message == WM_NCCREATE) {
+    const auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
+    SetWindowLongPtrW(window, GWLP_USERDATA,
+                      reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+    return TRUE;
+  }
+
+  auto* service = reinterpret_cast<OpenLessTextService*>(
+      GetWindowLongPtrW(window, GWLP_USERDATA));
+  if (message == kSubmitTextMessage && service != nullptr) {
+    auto* request = reinterpret_cast<SubmitTextRequest*>(lparam);
+    if (request == nullptr || request->session_id == nullptr ||
+        request->text == nullptr) {
+      return 0;
+    }
+
+    request->result =
+        service->CommitTextOnOwnerThread(*request->session_id, *request->text);
+    return 1;
+  }
+
+  return DefWindowProcW(window, message, wparam, lparam);
+}

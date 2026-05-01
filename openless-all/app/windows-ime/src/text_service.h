@@ -4,6 +4,8 @@
 #include <string>
 #include <windows.h>
 
+#include "ipc_client.h"
+
 class OpenLessTextService final : public ITfTextInputProcessorEx {
  public:
   OpenLessTextService();
@@ -27,8 +29,20 @@ class OpenLessTextService final : public ITfTextInputProcessorEx {
  private:
   HRESULT StartIpcServer();
   void StopIpcServer();
+  HRESULT EnsureMessageWindow();
+  void DestroyMessageWindow();
+  HRESULT CommitTextOnOwnerThread(const std::wstring& session_id,
+                                  const std::wstring& text);
+
+  static LRESULT CALLBACK MessageWindowProc(HWND window,
+                                            UINT message,
+                                            WPARAM wparam,
+                                            LPARAM lparam);
 
   LONG ref_count_ = 1;
   ITfThreadMgr* thread_mgr_ = nullptr;
   TfClientId client_id_ = TF_CLIENTID_NULL;
+  DWORD owner_thread_id_ = 0;
+  HWND message_window_ = nullptr;
+  OpenLessPipeServer pipe_server_;
 };
