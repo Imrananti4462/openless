@@ -20,6 +20,7 @@ mod persistence;
 mod polish;
 mod recorder;
 mod types;
+mod windows_ime_protocol;
 
 #[cfg(target_os = "macos")]
 use std::sync::mpsc;
