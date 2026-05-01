@@ -2502,13 +2502,17 @@ fn maybe_position_capsule_bottom_center<R: tauri::Runtime>(
         monitor_height: monitor.size().height,
         scale_bits: monitor.scale_factor().to_bits(),
     };
-    let mut last = inner.capsule_layout.lock();
-    if last.as_ref() == Some(&next) {
+    {
+        let last = inner.capsule_layout.lock();
+        if last.as_ref() == Some(&next) {
+            return;
+        }
+    }
+    if crate::position_capsule_bottom_center(window, translation_active).is_ok() {
+        let mut last = inner.capsule_layout.lock();
+        *last = Some(next);
         return;
     }
-    *last = Some(next);
-    drop(last);
-    let _ = crate::position_capsule_bottom_center(window, translation_active);
 }
 
 // ─────────────────────────── audio bridge ───────────────────────────
