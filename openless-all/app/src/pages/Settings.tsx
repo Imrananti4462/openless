@@ -15,12 +15,14 @@ import {
   getHotkeyStatus,
   openExternal,
   openSystemSettings,
+  listProviderModels,
   readCredential,
   requestAccessibilityPermission,
   requestMicrophonePermission,
   setActiveAsrProvider,
   setActiveLlmProvider,
   setCredential,
+  validateProviderCredentials,
 } from '../lib/ipc';
 import type {
   HotkeyCapability,
@@ -286,6 +288,8 @@ function ProvidersSection() {
   const { prefs, updatePrefs } = useHotkeySettings();
   const [llmProvider, setLlmProvider] = useState<LlmPresetId>('ark');
   const [asrProvider, setAsrProvider] = useState<AsrPresetId>('volcengine');
+  const [llmModelRevision, setLlmModelRevision] = useState(0);
+  const [asrModelRevision, setAsrModelRevision] = useState(0);
 
   useEffect(() => {
     if (!prefs) return;
@@ -342,8 +346,9 @@ function ProvidersSection() {
         <CredentialField key={`${llmProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="ark.api_key" mono mask />
         <CredentialField key={`${llmProvider}:endpoint`} label={t('settings.providers.baseUrlLabel')} account="ark.endpoint"
           placeholder={preset.baseUrl || 'https://your-endpoint/v1'} />
-        <CredentialField key={`${llmProvider}:model`} label={t('settings.providers.modelLabel')} account="ark.model_id"
+        <CredentialField key={`${llmProvider}:model:${llmModelRevision}`} label={t('settings.providers.modelLabel')} account="ark.model_id"
           placeholder={preset.modelPlaceholder || 'model-name'} mono />
+        <ProviderTools key={llmProvider} kind="llm" modelAccount="ark.model_id" onModelSelected={() => setLlmModelRevision(v => v + 1)} />
       </Card>
 
       <Card>
@@ -374,13 +379,100 @@ function ProvidersSection() {
             <CredentialField key={`${asrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" mono mask />
             <CredentialField key={`${asrProvider}:endpoint`} label={t('settings.providers.baseUrlLabel')} account="asr.endpoint"
               placeholder="https://api.openai.com/v1" defaultValue="https://api.openai.com/v1" />
-            <CredentialField key={`${asrProvider}:model`} label={t('settings.providers.modelLabel')} account="asr.model"
+            <CredentialField key={`${asrProvider}:model:${asrModelRevision}`} label={t('settings.providers.modelLabel')} account="asr.model"
               placeholder="whisper-1" />
+            <ProviderTools kind="asr" modelAccount="asr.model" onModelSelected={() => setAsrModelRevision(v => v + 1)} />
           </>
         )}
       </Card>
     </>
   );
+}
+
+type ProviderToolStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
+
+function ProviderTools({ kind, modelAccount, onModelSelected }: { kind: 'llm' | 'asr'; modelAccount: string; onModelSelected: () => void }) {
+  const { t } = useTranslation();
+  const [models, setModels] = useState<string[]>([]);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [status, setStatus] = useState<ProviderToolStatus>('idle');
+  const [message, setMessage] = useState('');
+
+  const setResult = (next: ProviderToolStatus, nextMessage: string) => {
+    setStatus(next);
+    setMessage(nextMessage);
+  };
+
+  const validate = async () => {
+    setResult('loading', t('settings.providers.validating'));
+    try {
+      const result = await validateProviderCredentials(kind);
+      setResult(result.ok ? 'success' : 'error', result.message || t('settings.providers.validateSuccess'));
+    } catch (error) {
+      setResult('error', providerErrorMessage(error, t));
+    }
+  };
+
+  const loadModels = async () => {
+    setResult('loading', t('settings.providers.loadingModels'));
+    try {
+      const result = await listProviderModels(kind);
+      setModels(result.models);
+      if (result.models.length === 0) {
+        setResult('empty', t('settings.providers.modelsEmpty'));
+      } else {
+        setSelectedModel('');
+        setResult('success', t('settings.providers.modelsLoaded', { count: result.models.length }));
+      }
+    } catch (error) {
+      setModels([]);
+      setResult('error', providerErrorMessage(error, t));
+    }
+  };
+
+  const applyModel = async (model: string) => {
+    setSelectedModel(model);
+    await setCredential(modelAccount, model);
+    onModelSelected();
+  };
+
+  return (
+    <SettingRow label={t('settings.providers.toolsLabel')} desc={t('settings.providers.toolsDesc')}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', maxWidth: 420 }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button onClick={validate} style={miniBtnStyle} disabled={status === 'loading'}>{t('settings.providers.validate')}</button>
+          <button onClick={loadModels} style={miniBtnStyle} disabled={status === 'loading'}>{t('settings.providers.fetchModels')}</button>
+          {models.length > 0 && (
+            <select
+              value={selectedModel}
+              onChange={e => applyModel(e.target.value)}
+              style={{ ...inputStyle, maxWidth: 220 }}
+            >
+              <option value="" disabled>{t('settings.providers.selectModel')}</option>
+              {models.map(model => <option key={model} value={model}>{model}</option>)}
+            </select>
+          )}
+        </div>
+        {message && (
+          <span style={{ fontSize: 11, color: status === 'error' ? 'var(--ol-warn)' : status === 'empty' ? 'var(--ol-ink-4)' : 'var(--ol-ok)', lineHeight: 1.4 }}>
+            {message}
+          </span>
+        )}
+      </div>
+    </SettingRow>
+  );
+}
+
+
+function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslation>['t']): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.startsWith('providerHttpStatus:')) {
+    return t('settings.providers.providerHttpStatus', { status: message.split(':')[1] || '?' });
+  }
+  if (message.includes('API Key')) return t('settings.providers.apiKeyMissing');
+  if (message.includes('Endpoint')) return t('settings.providers.endpointMissing');
+  if (message.includes('timeout') || message.includes('超时')) return t('settings.providers.requestTimeout');
+  return t('common.operationFailed');
 }
 
 type CredentialFieldStatus = 'idle' | 'saving' | 'saved' | 'readError' | 'saveError' | 'copied' | 'copyError';
@@ -567,6 +659,15 @@ const inputStyle: CSSProperties = {
   width: '100%', maxWidth: 360,
   transition: 'background 0.12s ease-out, border-color 0.12s ease-out',
 };
+const miniBtnStyle: CSSProperties = {
+  height: 32, padding: '0 10px',
+  border: '0.5px solid var(--ol-line-strong)',
+  borderRadius: 8, background: 'var(--ol-surface)',
+  color: 'var(--ol-ink-2)', cursor: 'default', flexShrink: 0,
+  fontSize: 12, fontWeight: 500,
+  transition: 'background 0.12s ease-out, border-color 0.12s ease-out, color 0.12s ease-out',
+};
+
 const iconBtnStyle: CSSProperties = {
   width: 32, height: 32,
   border: '0.5px solid var(--ol-line-strong)',

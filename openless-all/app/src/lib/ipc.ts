@@ -63,6 +63,15 @@ const mockCredentialsStatus: CredentialsStatus = {
   arkConfigured: true,
 };
 
+export interface ProviderCheckResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface ProviderModelsResult {
+  models: string[];
+}
+
 const mockHotkeyStatus: HotkeyStatus = {
   adapter: 'windowsLowLevel',
   state: 'installed',
@@ -129,6 +138,14 @@ export function setActiveLlmProvider(provider: string): Promise<void> {
 
 export function readCredential(account: string): Promise<string | null> {
   return invokeOrMock<string | null>('read_credential', { account }, () => null);
+}
+
+export function validateProviderCredentials(kind: 'llm' | 'asr'): Promise<ProviderCheckResult> {
+  return invokeOrMock('validate_provider_credentials', { kind }, () => ({ ok: true, message: 'Mock credentials are valid.' }));
+}
+
+export function listProviderModels(kind: 'llm' | 'asr'): Promise<ProviderModelsResult> {
+  return invokeOrMock('list_provider_models', { kind }, () => ({ models: kind === 'llm' ? ['gpt-4o', 'deepseek-chat'] : ['whisper-1'] }));
 }
 
 // ── History ────────────────────────────────────────────────────────────

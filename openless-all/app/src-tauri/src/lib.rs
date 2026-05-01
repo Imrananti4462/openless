@@ -175,6 +175,8 @@ pub fn run() {
             commands::read_credential,
             commands::set_active_asr_provider,
             commands::set_active_llm_provider,
+            commands::validate_provider_credentials,
+            commands::list_provider_models,
             restart_app,
         ])
         .build(tauri::generate_context!())
