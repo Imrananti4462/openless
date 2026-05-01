@@ -7,6 +7,8 @@ import { useTranslation } from 'react-i18next';
 import { isTauri, restartApp } from '../lib/ipc';
 import { Btn } from '../pages/_atoms';
 
+const UPDATE_CHECK_TIMEOUT_MS = 15_000;
+
 export type UpdateStatus =
   | 'idle'
   | 'checking'
@@ -78,7 +80,7 @@ export function useAutoUpdate(): UseAutoUpdate {
         return;
       }
       const { check } = await import('@tauri-apps/plugin-updater');
-      const next = await check();
+      const next = await check({ timeout: UPDATE_CHECK_TIMEOUT_MS });
       updateRef.current = next;
       setVersion(next?.version ?? '');
       setStatus(next ? 'available' : 'none');
