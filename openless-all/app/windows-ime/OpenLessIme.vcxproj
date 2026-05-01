@@ -51,7 +51,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>msctf.lib;ole32.lib;uuid.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ole32.lib;uuid.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>src\OpenLessIme.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
@@ -69,7 +69,7 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>msctf.lib;ole32.lib;uuid.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ole32.lib;uuid.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>src\OpenLessIme.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
