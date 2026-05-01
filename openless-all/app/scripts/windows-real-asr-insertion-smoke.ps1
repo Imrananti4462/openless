@@ -5,6 +5,8 @@ param(
   [string]$Phrase = "OpenLess Windows real regression",
   [int]$TimeoutSeconds = 120,
   [int]$VirtualKey = 0xA3,
+  [int]$ManualSpeechSeconds = 8,
+  [switch]$ManualSpeech,
   [switch]$DebugHotkeyEvents
 )
 
@@ -370,7 +372,12 @@ try {
     throw "OpenLess recording session did not start."
   }
 
-  Speak-TestPhrase $Phrase
+  if ($ManualSpeech) {
+    Write-Host "[action] Please speak into the real microphone for $ManualSpeechSeconds seconds."
+    Start-Sleep -Seconds $ManualSpeechSeconds
+  } else {
+    Speak-TestPhrase $Phrase
+  }
   Start-Sleep -Milliseconds 800
   Release-Hotkey
 
