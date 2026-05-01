@@ -172,7 +172,8 @@ mod windows_impl {
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardLayout, HKL};
     use windows::Win32::UI::TextServices::{
         CLSID_TF_InputProcessorProfiles, ITfInputProcessorProfileMgr, TF_INPUTPROCESSORPROFILE,
-        TF_IPPMF_FORPROCESS, TF_PROFILETYPE_INPUTPROCESSOR, TF_PROFILETYPE_KEYBOARDLAYOUT,
+        GUID_TFCAT_TIP_KEYBOARD, TF_IPPMF_FORPROCESS, TF_PROFILETYPE_INPUTPROCESSOR,
+        TF_PROFILETYPE_KEYBOARDLAYOUT,
     };
 
     struct ComApartment;
@@ -200,7 +201,7 @@ mod windows_impl {
         with_profile_manager(|manager| {
             let mut profile = TF_INPUTPROCESSORPROFILE::default();
             unsafe {
-                manager.GetActiveProfile(&GUID::zeroed(), &mut profile)?;
+                manager.GetActiveProfile(&active_profile_category_guid(), &mut profile)?;
             }
 
             if profile.dwProfileType == TF_PROFILETYPE_INPUTPROCESSOR {
@@ -305,6 +306,10 @@ mod windows_impl {
         })?)
     }
 
+    pub(super) fn active_profile_category_guid() -> GUID {
+        GUID_TFCAT_TIP_KEYBOARD
+    }
+
     fn normalize_guid_string(value: &str) -> String {
         let upper = value.trim().to_ascii_uppercase();
         if upper.starts_with('{') && upper.ends_with('}') {
@@ -401,6 +406,7 @@ mod tests {
 #[cfg(all(test, target_os = "windows"))]
 mod windows_tests {
     use super::*;
+    use windows::Win32::UI::TextServices::GUID_TFCAT_TIP_KEYBOARD;
 
     #[test]
     fn openless_profile_identifiers_are_fixed() {
@@ -412,6 +418,14 @@ mod windows_tests {
         assert_eq!(
             OPENLESS_PROFILE_GUID_BRACED,
             "{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E}"
+        );
+    }
+
+    #[test]
+    fn active_profile_capture_uses_keyboard_tip_category() {
+        assert_eq!(
+            windows_impl::active_profile_category_guid(),
+            GUID_TFCAT_TIP_KEYBOARD
         );
     }
 }
