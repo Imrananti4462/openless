@@ -11,6 +11,7 @@ constexpr wchar_t kClsidKey[] =
     L"Software\\Classes\\CLSID\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}";
 constexpr wchar_t kInprocServer32Key[] =
     L"Software\\Classes\\CLSID\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\\InprocServer32";
+constexpr REGSAM kRegistryWriteAccess = KEY_WRITE | KEY_WOW64_64KEY;
 
 HRESULT HResultFromWin32Error(LSTATUS status) {
   return status == ERROR_SUCCESS ? S_OK : HRESULT_FROM_WIN32(status);
@@ -37,9 +38,9 @@ HRESULT RegisterComServer(HINSTANCE module) {
 
   HKEY clsid_key = nullptr;
   LSTATUS status =
-      RegCreateKeyExW(HKEY_CURRENT_USER, kClsidKey, 0, nullptr,
-                      REG_OPTION_NON_VOLATILE, KEY_WRITE, nullptr, &clsid_key,
-                      nullptr);
+      RegCreateKeyExW(HKEY_LOCAL_MACHINE, kClsidKey, 0, nullptr,
+                      REG_OPTION_NON_VOLATILE, kRegistryWriteAccess, nullptr,
+                      &clsid_key, nullptr);
   HRESULT hr = HResultFromWin32Error(status);
   if (FAILED(hr)) {
     return hr;
@@ -52,8 +53,8 @@ HRESULT RegisterComServer(HINSTANCE module) {
   }
 
   HKEY inproc_key = nullptr;
-  status = RegCreateKeyExW(HKEY_CURRENT_USER, kInprocServer32Key, 0, nullptr,
-                           REG_OPTION_NON_VOLATILE, KEY_WRITE, nullptr,
+  status = RegCreateKeyExW(HKEY_LOCAL_MACHINE, kInprocServer32Key, 0, nullptr,
+                           REG_OPTION_NON_VOLATILE, kRegistryWriteAccess, nullptr,
                            &inproc_key, nullptr);
   hr = HResultFromWin32Error(status);
   if (FAILED(hr)) {
@@ -69,7 +70,7 @@ HRESULT RegisterComServer(HINSTANCE module) {
 }
 
 HRESULT DeleteComServerRegistration() {
-  const LSTATUS status = RegDeleteTreeW(HKEY_CURRENT_USER, kClsidKey);
+  const LSTATUS status = RegDeleteTreeW(HKEY_LOCAL_MACHINE, kClsidKey);
   if (status == ERROR_FILE_NOT_FOUND) {
     return S_OK;
   }
@@ -121,6 +122,8 @@ HRESULT RegisterLanguageProfile() {
     return hr;
   }
 
+  profiles->Unregister(CLSID_OpenLessTextService);
+
   hr = profiles->Register(CLSID_OpenLessTextService);
   if (SUCCEEDED(hr)) {
     hr = profiles->AddLanguageProfile(
@@ -150,6 +153,10 @@ HRESULT RegisterKeyboardCategory() {
   if (FAILED(hr)) {
     return hr;
   }
+
+  category_mgr->UnregisterCategory(CLSID_OpenLessTextService,
+                                   GUID_TFCAT_TIP_KEYBOARD,
+                                   CLSID_OpenLessTextService);
 
   hr = category_mgr->RegisterCategory(CLSID_OpenLessTextService,
                                       GUID_TFCAT_TIP_KEYBOARD,

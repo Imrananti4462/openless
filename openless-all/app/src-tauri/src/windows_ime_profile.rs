@@ -195,7 +195,7 @@ mod windows_impl {
         TF_INPUTPROCESSORPROFILE, TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE, TF_IPPMF_FORSESSION,
         TF_PROFILETYPE_INPUTPROCESSOR, TF_PROFILETYPE_KEYBOARDLAYOUT,
     };
-    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY};
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY};
     use winreg::RegKey;
 
     const OPENLESS_COM_INPROC_KEY: &str =
@@ -347,9 +347,9 @@ mod windows_impl {
     }
 
     fn inspect_windows_ime_registration() -> RegistrationInspection {
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-        let com_key = hkcu.open_subkey_with_flags(OPENLESS_COM_INPROC_KEY, KEY_READ);
+        let com_key =
+            hklm.open_subkey_with_flags(OPENLESS_COM_INPROC_KEY, KEY_READ | KEY_WOW64_64KEY);
         let tip_key_exists = hklm
             .open_subkey_with_flags(OPENLESS_TSF_PROFILE_KEY, KEY_READ | KEY_WOW64_64KEY)
             .is_ok();
