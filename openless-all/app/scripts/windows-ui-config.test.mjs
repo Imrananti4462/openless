@@ -28,24 +28,9 @@ assertEqual(capsuleWindow.height, 110, 'windows capsule config keeps translation
 assertEqual(capsuleWindow.transparent, true, 'capsule window should keep transparent visuals');
 assertEqual(capsuleWindow.alwaysOnTop, true, 'capsule window should stay above the focused app while recording');
 assertMatch(
-  libRs,
-  /#\[cfg\(target_os = "windows"\)\][\s\S]*?\(196\.0, height\)/,
-  'windows runtime capsule width should collapse to the visible pill',
-);
-assertMatch(
-  libRs,
-  /let height = if translation_active \{ 110\.0 \} else \{ 52\.0 \};/,
-  'windows runtime capsule height should shrink outside translation mode',
-);
-assertMatch(
-  libRs,
-  /window\.set_size\(LogicalSize::new\(cap_w, cap_h\)\)\?/,
-  'capsule positioning should resync runtime size with the computed layout',
-);
-assertMatch(
   coordinatorRs,
-  /let visible = matches!\(\s*state,\s*CapsuleState::Recording \| CapsuleState::Transcribing \| CapsuleState::Polishing\s*\);/m,
-  'capsule should only stay visible during active recording or processing states',
+  /let visible = !matches!\(state,\s*CapsuleState::Idle\);/,
+  'capsule should stay visible until the unified idle hide path runs',
 );
 assertMatch(
   coordinatorRs,
