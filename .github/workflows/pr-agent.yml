@@ -22,7 +22,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           
           # 自定义 Base URL（重点）
-          OPENAI.API_BASE: "https://ds.chris233.qzz.io/v1"
+          OPENAI.API_BASE: "https://cpa.chris233.qzz.io/v1"
           
           # 中文输出
           pr_reviewer.response_language: "zh-CN"
