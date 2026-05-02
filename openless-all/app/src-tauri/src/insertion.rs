@@ -14,7 +14,10 @@ use std::time::Duration;
 
 use crate::types::InsertStatus;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(750);
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(150);
 
 pub struct TextInserter;
@@ -131,19 +134,24 @@ fn insert_with_clipboard_restore(text: &str, restore_clipboard_after_paste: bool
     }
 
     if restore_clipboard_after_paste {
-        maybe_restore_clipboard(restore_plan);
+        schedule_clipboard_restore(restore_plan);
     }
     // 关掉 → 听写文本留在剪贴板里，simulate_paste 没真正落地时用户能手动 Ctrl+V 找回。
     insertion_success_status()
 }
 
 #[cfg(not(target_os = "macos"))]
-fn maybe_restore_clipboard(plan: ClipboardRestorePlan) {
+fn schedule_clipboard_restore(plan: ClipboardRestorePlan) {
+    std::thread::spawn(move || restore_clipboard_after_delay(plan, CLIPBOARD_RESTORE_DELAY));
+}
+
+#[cfg(not(target_os = "macos"))]
+fn restore_clipboard_after_delay(plan: ClipboardRestorePlan, delay: Duration) {
     if plan.previous_text.is_none() {
         return;
     }
 
-    std::thread::sleep(CLIPBOARD_RESTORE_DELAY);
+    std::thread::sleep(delay);
 
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(clipboard) => clipboard,
@@ -303,6 +311,9 @@ mod macos {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
 
     #[test]
     #[cfg(not(target_os = "macos"))]
@@ -316,5 +327,35 @@ mod tests {
             "dictated text"
         ));
         assert!(!should_restore_clipboard(None, "dictated text"));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn delayed_terminal_paste_must_see_dictated_text_before_clipboard_restore() {
+        let inserted_text = "dictated text".to_string();
+        let previous_text = "older clipboard".to_string();
+        let clipboard = Arc::new(Mutex::new(inserted_text.clone()));
+        let pasted = Arc::new(Mutex::new(None::<String>));
+
+        let clipboard_for_paste = Arc::clone(&clipboard);
+        let pasted_for_paste = Arc::clone(&pasted);
+        let reader = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(250));
+            let seen = clipboard_for_paste.lock().unwrap().clone();
+            *pasted_for_paste.lock().unwrap() = Some(seen);
+        });
+
+        thread::sleep(CLIPBOARD_RESTORE_DELAY);
+        let current_text = Some(clipboard.lock().unwrap().clone());
+        if should_restore_clipboard(current_text.as_deref(), &inserted_text) {
+            *clipboard.lock().unwrap() = previous_text;
+        }
+
+        reader.join().unwrap();
+
+        assert_eq!(
+            pasted.lock().unwrap().as_deref(),
+            Some(inserted_text.as_str())
+        );
     }
 }
