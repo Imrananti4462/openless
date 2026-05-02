@@ -2536,10 +2536,12 @@ fn emit_capsule(
 
     let show_capsule = inner.prefs.get().show_capsule;
     if let Some(window) = app.get_webview_window("capsule") {
-        let visible = matches!(
-            state,
-            CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
-        );
+        // 三平台统一：Done / Cancelled / Error 状态保留 ~1.5s toast
+        // （schedule_capsule_idle 之后会回 Idle 隐藏）。
+        // Windows 上 linger 的真实问题（截图选中 / 死区 / 拖拽卡顿）由 #140 加的
+        // `hide_capsule_window_if_present()` Win32 hard-hide 在 visible=false 分支
+        // 处理，不依赖把 Done/Cancelled/Error 打成 invisible。详见 PR #140 评论。
+        let visible = !matches!(state, CapsuleState::Idle);
         maybe_position_capsule_bottom_center(inner, &window, payload.translation);
         if show_capsule && visible {
             if cfg!(target_os = "windows") {
