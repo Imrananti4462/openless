@@ -105,12 +105,18 @@ pub fn run() {
                 #[cfg(target_os = "windows")]
                 {
                     use window_vibrancy::apply_mica;
-                    if let Err(e) = apply_mica(&main, None) {
-                        log::warn!("[main] mica failed: {e}");
-                    }
+                    // The window starts hidden so Windows native chrome can be disabled before
+                    // the first show; doing this after the native frame is visible is unreliable.
                     if let Err(e) = main.set_decorations(false) {
                         log::warn!("[main] disable native decorations failed: {e}");
                     }
+                    if let Err(e) = apply_mica(&main, None) {
+                        log::warn!("[main] mica failed: {e}");
+                    }
+                    apply_windows_rounded_frame(&main);
+                }
+                if let Err(e) = main.show() {
+                    log::warn!("[main] initial show failed: {e}");
                 }
             }
 
@@ -214,9 +220,15 @@ pub fn run() {
             RunEvent::Reopen { .. } => show_main_window(app),
             RunEvent::WindowEvent { label, event, .. } => {
                 if label == "main" {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    if let tauri::WindowEvent::CloseRequested { ref api, .. } = event {
                         api.prevent_close();
                         hide_main_window(app);
+                    }
+                    #[cfg(target_os = "windows")]
+                    if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }) {
+                        if let Some(main) = app.get_webview_window("main") {
+                            apply_windows_rounded_frame(&main);
+                        }
                     }
                 }
             }
@@ -227,6 +239,97 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+#[cfg(target_os = "windows")]
+fn apply_windows_rounded_frame<R: Runtime>(window: &tauri::WebviewWindow<R>) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::{BOOL, HWND, RECT};
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    };
+    use windows::Win32::Graphics::Gdi::{CreateRoundRectRgn, SetWindowRgn, HRGN};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongW, GetWindowRect, SetWindowLongW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
+        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_CAPTION, WS_THICKFRAME,
+    };
+
+    let handle = match window.window_handle().map(|h| h.as_raw()) {
+        Ok(RawWindowHandle::Win32(handle)) => handle,
+        Ok(other) => {
+            log::warn!("[main] unexpected raw window handle for DWM frame: {other:?}");
+            return;
+        }
+        Err(e) => {
+            log::warn!("[main] read raw window handle failed: {e}");
+            return;
+        }
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
+
+    unsafe {
+        let style = GetWindowLongW(hwnd, GWL_STYLE);
+        let desired_style = (style | WS_THICKFRAME.0 as i32) & !(WS_CAPTION.0 as i32);
+        if style != desired_style {
+            SetWindowLongW(hwnd, GWL_STYLE, desired_style);
+            if let Err(e) = SetWindowPos(
+                hwnd,
+                HWND::default(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            ) {
+                log::warn!("[main] refresh native frame after style update failed: {e}");
+            }
+        }
+
+        if window.is_maximized().unwrap_or(false) {
+            let _ = SetWindowRgn(hwnd, HRGN::default(), BOOL(1));
+            return;
+        }
+
+        let corner_preference = DWMWCP_ROUND;
+        if let Err(e) = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corner_preference as *const _ as *const core::ffi::c_void,
+            std::mem::size_of_val(&corner_preference) as u32,
+        ) {
+            log::warn!("[main] set DWM rounded corners failed: {e}");
+        }
+
+        // Remove DWM's fallback 1px light border; the React shell draws the visual stroke.
+        let border_color_none: u32 = 0xFFFFFFFE;
+        if let Err(e) = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &border_color_none as *const _ as *const core::ffi::c_void,
+            std::mem::size_of_val(&border_color_none) as u32,
+        ) {
+            log::warn!("[main] remove DWM border color failed: {e}");
+        }
+
+        let mut rect = RECT::default();
+        if let Err(e) = GetWindowRect(hwnd, &mut rect) {
+            log::warn!("[main] read window rect for rounded region failed: {e}");
+            return;
+        }
+        let width = rect.right - rect.left;
+        let height = rect.bottom - rect.top;
+        if width <= 0 || height <= 0 {
+            return;
+        }
+        let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, 18, 18);
+        if region.is_invalid() {
+            log::warn!("[main] create rounded window region failed");
+            return;
+        }
+        if SetWindowRgn(hwnd, region, BOOL(1)) == 0 {
+            log::warn!("[main] apply rounded window region failed");
+        }
+    }
 }
 
 #[tauri::command]
@@ -450,7 +553,7 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
     let size = monitor.size();
     let logical_w = size.width as f64 / scale;
     let logical_h = size.height as f64 / scale;
-    let capsule_height = capsule_window_size(false).1;
+    let capsule_height = capsule_height_for_qa();
     let x = ((logical_w - QA_WINDOW_WIDTH) / 2.0).max(0.0);
     let y = (logical_h
         - DOCK_BOTTOM_PADDING_FOR_QA
@@ -514,7 +617,16 @@ pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind
             }
         });
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        if !show_qa_window_no_activate(&window) {
+            log::warn!("[qa] show_no_activate failed; falling back to window.show()");
+            if let Err(e) = window.show() {
+                log::warn!("[qa] show fallback failed: {e}");
+            }
+        }
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     if let Err(e) = window.show() {
         log::warn!("[qa] show failed: {e}");
     }
@@ -560,6 +672,41 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn show_qa_window_no_activate<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> bool {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
+    };
+
+    let Ok(handle) = window.window_handle() else {
+        return false;
+    };
+    let RawWindowHandle::Win32(raw) = handle.as_raw() else {
+        return false;
+    };
+    let hwnd = HWND(raw.hwnd.get() as *mut _);
+    if hwnd.0.is_null() {
+        return false;
+    }
+
+    let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+    let _ = unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE,
+        )
+    };
+    true
+}
+
 /// 把 capsule 窗口移到屏幕底部居中，与 Swift `CapsuleWindowController.repositionToBottomCenter` 同效。
 /// 留 80pt 给 macOS Dock；Windows 任务栏一般在底部 48pt 以内，整体也合适。
 pub(crate) fn position_capsule_bottom_center<R: tauri::Runtime>(
@@ -570,59 +717,94 @@ pub(crate) fn position_capsule_bottom_center<R: tauri::Runtime>(
         Some(m) => m,
         None => return Ok(()),
     };
-    let (cap_w, cap_h) = capsule_window_size(translation_active);
-    window.set_size(LogicalSize::new(cap_w, cap_h))?;
+    let bounds = capsule_window_bounds(translation_active);
+    window.set_size(LogicalSize::new(bounds.width, bounds.height))?;
 
     let scale = monitor.scale_factor();
     let size = monitor.size();
     let logical_w = size.width as f64 / scale;
     let logical_h = size.height as f64 / scale;
-    let x = ((logical_w - cap_w) / 2.0).max(0.0);
-    let y = (logical_h - cap_h - 80.0).max(0.0);
+    let x = ((logical_w - bounds.width) / 2.0).max(0.0);
+    let y = (logical_h - capsule_visual_height(translation_active) - 80.0 - bounds.bottom_inset)
+        .max(0.0);
     window.set_position(LogicalPosition::new(x, y))?;
     Ok(())
 }
 
-fn capsule_window_size(translation_active: bool) -> (f64, f64) {
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CapsuleWindowBounds {
+    width: f64,
+    height: f64,
+    bottom_inset: f64,
+}
+
+fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
     #[cfg(target_os = "windows")]
     {
-        let height = if translation_active { 110.0 } else { 52.0 };
-        (196.0, height)
+        CapsuleWindowBounds {
+            width: 220.0,
+            height: if translation_active { 118.0 } else { 84.0 },
+            bottom_inset: 12.0,
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        let height = if translation_active { 110.0 } else { 42.0 };
-        (176.0, height)
+        CapsuleWindowBounds {
+            width: 176.0,
+            height: if translation_active { 110.0 } else { 42.0 },
+            bottom_inset: 0.0,
+        }
+    }
+}
+
+fn capsule_visual_height(_translation_active: bool) -> f64 {
+    #[cfg(target_os = "windows")]
+    {
+        52.0
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        42.0
     }
 }
 
 fn capsule_height_for_qa() -> f64 {
-    capsule_window_size(false).1
+    capsule_visual_height(false)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{capsule_height_for_qa, capsule_window_size};
+    use super::{capsule_height_for_qa, capsule_visual_height, capsule_window_bounds};
 
     #[test]
-    fn capsule_window_size_matches_visible_pill_when_not_translating() {
-        let (width, height) = capsule_window_size(false);
+    fn capsule_window_bounds_leave_room_for_windows_shadow() {
+        let bounds = capsule_window_bounds(false);
         #[cfg(target_os = "windows")]
-        assert_eq!((width, height), (196.0, 52.0));
+        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 84.0, 12.0));
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!((width, height), (176.0, 42.0));
+        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (176.0, 42.0, 0.0));
     }
 
     #[test]
-    fn capsule_window_size_expands_for_translation_badge() {
-        let (width, height) = capsule_window_size(true);
+    fn capsule_window_bounds_expand_for_translation_badge() {
+        let bounds = capsule_window_bounds(true);
         #[cfg(target_os = "windows")]
-        assert_eq!((width, height), (196.0, 110.0));
+        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 118.0, 12.0));
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!((width, height), (176.0, 110.0));
+        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (176.0, 110.0, 0.0));
+    }
+
+    #[test]
+    fn capsule_visual_height_matches_frontend_pill() {
+        #[cfg(target_os = "windows")]
+        assert_eq!(capsule_visual_height(true), 52.0);
+
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(capsule_visual_height(true), 42.0);
     }
 
     #[test]

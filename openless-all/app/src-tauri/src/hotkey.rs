@@ -164,7 +164,7 @@ mod platform {
             "hotkey hook 启动超时",
             run_listen_loop,
         )?;
-        let _ = listener.startup;
+        listener.startup;
         Ok(Box::new(MacHotkeyAdapter {
             shared: listener.shared,
         }))
@@ -662,6 +662,16 @@ mod platform {
         binding: HotkeyBinding,
         tx: Sender<HotkeyEvent>,
     ) -> Result<Box<dyn HotkeyAdapter>, HotkeyInstallError> {
+        if std::env::var("XDG_SESSION_TYPE")
+            .ok()
+            .as_deref()
+            == Some("wayland")
+        {
+            return Err(install_error(
+                "wayland_unsupported",
+                "Wayland 暂不支持全局热键，请切到 X11 session 后再试",
+            ));
+        }
         let listener = start_listener_thread(
             binding,
             tx,

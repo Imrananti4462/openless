@@ -10,12 +10,23 @@
 //!    → CGEventPost，跟我们这里完全同源。
 //! 3. 其他平台 (Windows/Linux) 仍用 enigo。
 
+#[cfg(not(target_os = "macos"))]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(not(target_os = "macos"))]
 use std::time::Duration;
+
+#[cfg(not(target_os = "macos"))]
+use once_cell::sync::Lazy;
+#[cfg(not(target_os = "macos"))]
+use parking_lot::Mutex;
 
 use crate::types::InsertStatus;
 
-#[cfg(not(target_os = "macos"))]
-const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(150);
+#[cfg(target_os = "windows")]
+const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(750);
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(750);
 
 pub struct TextInserter;
 
@@ -78,6 +89,20 @@ struct ClipboardRestorePlan {
     previous_text: Option<String>,
 }
 
+#[cfg(not(target_os = "macos"))]
+#[derive(Debug, Clone)]
+struct PendingClipboardRestore {
+    latest_restore_id: u64,
+    original_text: Option<String>,
+}
+
+#[cfg(not(target_os = "macos"))]
+static NEXT_CLIPBOARD_RESTORE_ID: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(not(target_os = "macos"))]
+static PENDING_CLIPBOARD_RESTORE: Lazy<Mutex<Option<PendingClipboardRestore>>> =
+    Lazy::new(|| Mutex::new(None));
+
 fn copy_to_clipboard(text: &str) -> bool {
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
@@ -131,19 +156,49 @@ fn insert_with_clipboard_restore(text: &str, restore_clipboard_after_paste: bool
     }
 
     if restore_clipboard_after_paste {
-        maybe_restore_clipboard(restore_plan);
+        schedule_clipboard_restore(restore_plan);
     }
     // 关掉 → 听写文本留在剪贴板里，simulate_paste 没真正落地时用户能手动 Ctrl+V 找回。
     insertion_success_status()
 }
 
 #[cfg(not(target_os = "macos"))]
-fn maybe_restore_clipboard(plan: ClipboardRestorePlan) {
-    if plan.previous_text.is_none() {
+fn schedule_clipboard_restore(plan: ClipboardRestorePlan) {
+    let restore_id = NEXT_CLIPBOARD_RESTORE_ID.fetch_add(1, Ordering::SeqCst);
+    let original_text = {
+        let mut pending = PENDING_CLIPBOARD_RESTORE.lock();
+        let original = pending
+            .as_ref()
+            .map(|batch| batch.original_text.clone())
+            .unwrap_or_else(|| plan.previous_text.clone());
+        *pending = Some(PendingClipboardRestore {
+            latest_restore_id: restore_id,
+            original_text: original.clone(),
+        });
+        original
+    };
+    std::thread::spawn(move || {
+        restore_clipboard_after_delay(
+            plan,
+            original_text,
+            restore_id,
+            CLIPBOARD_RESTORE_DELAY,
+        )
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn restore_clipboard_after_delay(
+    plan: ClipboardRestorePlan,
+    original_text: Option<String>,
+    restore_id: u64,
+    delay: Duration,
+) {
+    std::thread::sleep(delay);
+
+    if !is_latest_clipboard_restore(restore_id) {
         return;
     }
-
-    std::thread::sleep(CLIPBOARD_RESTORE_DELAY);
 
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(clipboard) => clipboard,
@@ -152,6 +207,7 @@ fn maybe_restore_clipboard(plan: ClipboardRestorePlan) {
                 "[insertion] clipboard re-open failed during restore: {}",
                 err
             );
+            clear_pending_clipboard_restore(restore_id);
             return;
         }
     };
@@ -167,14 +223,34 @@ fn maybe_restore_clipboard(plan: ClipboardRestorePlan) {
         }
     };
 
-    if !should_restore_clipboard(current_text.as_deref(), &plan.inserted_text) {
-        return;
+    if should_restore_clipboard(current_text.as_deref(), &plan.inserted_text) {
+        if let Some(previous_text) = original_text {
+            if let Err(err) = clipboard.set_text(previous_text) {
+                log::warn!("[insertion] clipboard restore failed: {}", err);
+            }
+        }
+    } else {
+        log::info!(
+            "[insertion] skip clipboard restore: latest clipboard no longer matches inserted text"
+        );
     }
 
-    if let Some(previous_text) = plan.previous_text {
-        if let Err(err) = clipboard.set_text(previous_text) {
-            log::warn!("[insertion] clipboard restore failed: {}", err);
-        }
+    clear_pending_clipboard_restore(restore_id);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_latest_clipboard_restore(restore_id: u64) -> bool {
+    matches!(
+        PENDING_CLIPBOARD_RESTORE.lock().as_ref(),
+        Some(batch) if batch.latest_restore_id == restore_id
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn clear_pending_clipboard_restore(restore_id: u64) {
+    let mut pending = PENDING_CLIPBOARD_RESTORE.lock();
+    if matches!(pending.as_ref(), Some(batch) if batch.latest_restore_id == restore_id) {
+        pending.take();
     }
 }
 
@@ -303,6 +379,9 @@ mod macos {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
 
     #[test]
     #[cfg(not(target_os = "macos"))]
@@ -316,5 +395,35 @@ mod tests {
             "dictated text"
         ));
         assert!(!should_restore_clipboard(None, "dictated text"));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn delayed_terminal_paste_must_see_dictated_text_before_clipboard_restore() {
+        let inserted_text = "dictated text".to_string();
+        let previous_text = "older clipboard".to_string();
+        let clipboard = Arc::new(Mutex::new(inserted_text.clone()));
+        let pasted = Arc::new(Mutex::new(None::<String>));
+
+        let clipboard_for_paste = Arc::clone(&clipboard);
+        let pasted_for_paste = Arc::clone(&pasted);
+        let reader = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(250));
+            let seen = clipboard_for_paste.lock().unwrap().clone();
+            *pasted_for_paste.lock().unwrap() = Some(seen);
+        });
+
+        thread::sleep(CLIPBOARD_RESTORE_DELAY);
+        let current_text = Some(clipboard.lock().unwrap().clone());
+        if should_restore_clipboard(current_text.as_deref(), &inserted_text) {
+            *clipboard.lock().unwrap() = previous_text;
+        }
+
+        reader.join().unwrap();
+
+        assert_eq!(
+            pasted.lock().unwrap().as_deref(),
+            Some(inserted_text.as_str())
+        );
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "openless"
-version = "1.2.11"
+version = "1.2.12"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
 edition = "2021"
@@ -35,6 +35,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 bytes = "1"
 url = "2"
+raw-window-handle = "0.6"
 
 # Hotkey + audio + insertion
 global-hotkey = "0.6"
@@ -52,8 +53,11 @@ objc2-foundation = "0.2"
 objc2-app-kit = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+raw-window-handle = "0.6"
 windows = { version = "0.58", features = [
   "Win32_Foundation",
+  "Win32_Graphics_Dwm",
+  "Win32_Graphics_Gdi",
   "Win32_UI_Shell",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",

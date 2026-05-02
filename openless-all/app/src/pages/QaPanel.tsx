@@ -31,6 +31,8 @@ export function QaPanel() {
   const [pinned, setPinned] = useState(false);
   /** 流式 LLM 答案：answer_delta 累积、answer 事件来时清空（最终内容已落到 messages）。 */
   const [streamingAnswer, setStreamingAnswer] = useState<string>('');
+  /** 录音电平：0..1。后端每帧 33ms 通过 qa:level emit。详见 issue #162。 */
+  const [level, setLevel] = useState<number>(0);
   const tRef = useRef(t);
   tRef.current = t;
 
@@ -39,6 +41,7 @@ export function QaPanel() {
     if (!isTauri) return;
     let unlistenState: (() => void) | undefined;
     let unlistenDismiss: (() => void) | undefined;
+    let unlistenLevel: (() => void) | undefined;
     let cancelled = false;
     (async () => {
       try {
@@ -54,6 +57,7 @@ export function QaPanel() {
               setSelectionPreview('');
               setErrorMsg('');
               setStreamingAnswer('');
+              setLevel(0);
               break;
             case 'recording':
               setStatus('recording');
@@ -61,11 +65,21 @@ export function QaPanel() {
               setErrorMsg('');
               setStreamingAnswer('');
               break;
+            case 'loading':
+              // ASR 在 finalize、user message 还没 push 的过渡帧。提前切到 thinking
+              // 视图避免 UI 卡 recording 几百 ms 反馈缺失。详见 issue #161。
+              setStatus('thinking');
+              setSelectionPreview('');
+              setErrorMsg('');
+              setStreamingAnswer('');
+              setLevel(0);
+              break;
             case 'thinking':
               setStatus('thinking');
               setSelectionPreview('');
               setErrorMsg('');
               setStreamingAnswer('');
+              setLevel(0);
               break;
             case 'answer_delta':
               // 流式增量。仍保持 thinking 状态——直到 answer 事件落定后才回 idle。
@@ -79,11 +93,13 @@ export function QaPanel() {
               setErrorMsg('');
               // messages 已被上面的 setMessages 落定，清掉流式 buffer 避免和最终气泡重影。
               setStreamingAnswer('');
+              setLevel(0);
               break;
             case 'error':
               setStatus('error');
               setErrorMsg(payload.error ?? tRef.current('qa.error'));
               setStreamingAnswer('');
+              setLevel(0);
               break;
           }
         });
@@ -91,12 +107,18 @@ export function QaPanel() {
           setPinned(false);
           void qaWindowDismiss();
         });
+        // qa:level — 录音电平，节流 ~33ms/帧。详见 issue #162。
+        const levelHandle = await listen<{ level: number }>('qa:level', event => {
+          setLevel(event.payload.level ?? 0);
+        });
         if (cancelled) {
           stateHandle();
           dismissHandle();
+          levelHandle();
         } else {
           unlistenState = stateHandle;
           unlistenDismiss = dismissHandle;
+          unlistenLevel = levelHandle;
         }
       } catch (error) {
         console.error('[QaPanel] listener setup failed', error);
@@ -106,6 +128,7 @@ export function QaPanel() {
       cancelled = true;
       unlistenState?.();
       unlistenDismiss?.();
+      unlistenLevel?.();
     };
   }, []);
 
@@ -145,11 +168,11 @@ export function QaPanel() {
       <div ref={scrollRef} style={contentStyle}>
         {messages.length === 0 && status === 'idle' && <EmptyHint t={t} />}
         {messages.length === 0 && status === 'recording' && (
-          <RecordingHeader preview={selectionPreview} t={t} />
+          <RecordingHeader preview={selectionPreview} t={t} level={level} />
         )}
         <MessageList messages={messages} />
         {status === 'recording' && messages.length > 0 && (
-          <TurnIndicator kind="recording" t={t} preview={selectionPreview} />
+          <TurnIndicator kind="recording" t={t} preview={selectionPreview} level={level} />
         )}
         {streamingAnswer && (
           <StreamingAssistantBubble markdown={streamingAnswer} />
@@ -248,9 +271,11 @@ function EmptyHint({ t }: { t: ReturnType<typeof useTranslation>['t'] }) {
 function RecordingHeader({
   preview,
   t,
+  level,
 }: {
   preview: string;
   t: ReturnType<typeof useTranslation>['t'];
+  level: number;
 }) {
   const truncated = useMemo(() => truncate(preview, SELECTION_PREVIEW_MAX), [preview]);
   return (
@@ -267,6 +292,32 @@ function RecordingHeader({
         <span style={recordingDotStyle} />
         {t('qa.recordingHint')}
       </div>
+      <LevelBar level={level} />
+    </div>
+  );
+}
+
+/** QA 录音电平条。后端 qa:level 每帧 ~33ms 推一次 0..1。详见 issue #162。 */
+function LevelBar({ level }: { level: number }) {
+  const pct = Math.min(100, Math.max(0, level * 100));
+  return (
+    <div
+      style={{
+        height: 4,
+        width: '100%',
+        background: 'rgba(0,0,0,0.06)',
+        borderRadius: 2,
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          height: '100%',
+          width: `${pct}%`,
+          background: 'var(--ol-blue)',
+          transition: 'width 0.08s ease-out',
+        }}
+      />
     </div>
   );
 }
@@ -366,10 +417,12 @@ function TurnIndicator({
   kind,
   preview,
   t,
+  level,
 }: {
   kind: 'recording' | 'thinking';
   preview?: string;
   t: ReturnType<typeof useTranslation>['t'];
+  level?: number;
 }) {
   if (kind === 'recording') {
     const truncated = preview ? truncate(preview, SELECTION_PREVIEW_MAX) : '';
@@ -387,6 +440,7 @@ function TurnIndicator({
           <span style={recordingDotStyle} />
           {t('qa.recordingHint')}
         </div>
+        <LevelBar level={level ?? 0} />
       </div>
     );
   }

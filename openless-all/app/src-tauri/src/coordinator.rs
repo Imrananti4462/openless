@@ -118,6 +118,10 @@ struct Inner {
     qa_asr: Mutex<Option<Arc<VolcengineStreamingASR>>>,
     /// QA 用的 Recorder 句柄。
     qa_recorder: Mutex<Option<Recorder>>,
+    /// QA SSE 流取消标志。begin_qa_session 重置为 false；cancel_qa_session 设 true；
+    /// polish::chat_completion_history_streaming 的 loop 每帧检查，true 时 break loop
+    /// 避免取消后 LLM 仍 drain HTTP body 烧 token。详见 issue #161。
+    qa_stream_cancelled: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +191,7 @@ impl Coordinator {
                 capsule_layout: Mutex::new(None),
                 qa_asr: Mutex::new(None),
                 qa_recorder: Mutex::new(None),
+                qa_stream_cancelled: Arc::new(AtomicBool::new(false)),
             }),
         }
     }
@@ -220,7 +225,20 @@ impl Coordinator {
     }
 
     pub fn stop_qa_hotkey_listener(&self) {
-        self.inner.qa_hotkey.lock().take();
+        // QaHotkeyMonitor::drop 在 macOS 底层是 Carbon RemoveEventHotKey，要求主线程。
+        // RunEvent::Exit 回调不保证在 AppKit 主线程跑，drop 漏到 tokio worker 上会
+        // 触发 macOS dispatch_assert_queue_fail SIGTRAP。包到 run_on_main_thread 让
+        // drop 在主线程发生；AppHandle 已 None 时直接 drop（最坏 crash 也是退出时刻）。
+        // 详见 issue #169。
+        let app = self.inner.app.lock().clone();
+        if let Some(app) = app {
+            let inner = Arc::clone(&self.inner);
+            let _ = app.run_on_main_thread(move || {
+                inner.qa_hotkey.lock().take();
+            });
+        } else {
+            self.inner.qa_hotkey.lock().take();
+        }
     }
 
     /// 用户在设置里改了 QA 组合键时调用。先持久化（由 prefs.set 完成），
@@ -516,9 +534,7 @@ fn qa_hotkey_supervisor_loop(inner: Arc<Inner>) {
             Err(e) => {
                 attempts += 1;
                 if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!(
-                        "[coord] QA hotkey 第 {attempts} 次注册失败: {e}; 3s 后重试"
-                    );
+                    log::warn!("[coord] QA hotkey 第 {attempts} 次注册失败: {e}; 3s 后重试");
                 }
                 std::thread::sleep(std::time::Duration::from_secs(3));
             }
@@ -744,18 +760,38 @@ async fn handle_window_hotkey_event(
     repeat: bool,
 ) -> Result<(), String> {
     if event_type == "keydown" && key == "Escape" {
-        cancel_session(inner);
+        // Esc 路由（issue #161）：QA 浮窗可见时优先取消 QA（不动 dictation）；
+        // 否则走 dictation 取消通路。之前无条件 cancel_session 导致 QA 浮窗
+        // 按 Esc 杀的是 dictation 而 QA 流还在烧 token。
+        let qa_active = {
+            let st = inner.qa_state.lock();
+            st.panel_visible || st.phase != QaPhase::Idle
+        };
+        if qa_active {
+            close_qa_panel(inner);
+        } else {
+            cancel_session(inner);
+        }
         return Ok(());
     }
 
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (inner, event_type, key, code, repeat);
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(target_os = "windows")]
     {
+        if !window_hotkey_fallback_enabled() {
+            if event_type == "keydown" && !repeat {
+                log::info!(
+                    "[window-hotkey] ignored because Windows lifecycle owner is the low-level hook"
+                );
+            }
+            return Ok(());
+        }
+
         let trigger = inner.prefs.get().hotkey.trigger;
         if !window_key_matches_trigger(trigger, &key, &code) {
             return Ok(());
@@ -779,6 +815,10 @@ async fn handle_window_hotkey_event(
         }
         Ok(())
     }
+}
+
+fn window_hotkey_fallback_enabled() -> bool {
+    crate::types::HotkeyCapability::current().explicit_fallback_available
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -820,7 +860,9 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
     }
     // 翻译模式标志重置；hotkey 监听器在 Shift down 时再 set true。
-    inner.translation_modifier_seen.store(false, Ordering::SeqCst);
+    inner
+        .translation_modifier_seen
+        .store(false, Ordering::SeqCst);
 
     #[cfg(any(debug_assertions, test))]
     if hotkey_injection_dry_run_enabled() {
@@ -1026,6 +1068,33 @@ fn spawn_recorder_error_monitor(inner: &Arc<Inner>, rx: mpsc::Receiver<RecorderE
         .ok();
 }
 
+/// QA 录音 runtime error 监听器。镜像 `spawn_recorder_error_monitor` 的语义但走 QA
+/// 收尾路径（`finish_qa_with_error` 替代 `abort_recording_with_error`）。
+/// 用 qa_state.session_id 守卫 stale 事件。详见 issue #168。
+fn spawn_qa_recorder_error_monitor(inner: &Arc<Inner>, rx: mpsc::Receiver<RecorderError>) {
+    let captured_session_id = inner.qa_state.lock().session_id;
+    let inner = Arc::clone(inner);
+    std::thread::Builder::new()
+        .name("openless-qa-recorder-error-monitor".into())
+        .spawn(move || {
+            if let Ok(err) = rx.recv() {
+                let current_session_id = inner.qa_state.lock().session_id;
+                if captured_session_id != current_session_id {
+                    log::warn!(
+                        "[coord] QA recorder error from stale session {} dropped (current={}, err={})",
+                        captured_session_id,
+                        current_session_id,
+                        err
+                    );
+                    return;
+                }
+                log::error!("[coord] QA recorder runtime error: {err}");
+                finish_qa_with_error(&inner, format!("录音设备异常: {err}"));
+            }
+        })
+        .ok();
+}
+
 fn abort_recording_with_error(inner: &Arc<Inner>, message: String) {
     let elapsed = {
         let mut state = inner.state.lock();
@@ -1192,6 +1261,19 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     // ASR 返回空转写护栏（来自 PR #66）：写一条 emptyTranscript 失败历史 + 错误胶囊，
     // 与 main 上其它 error 路径保持一致（带 schedule_capsule_idle 让胶囊自动消失）。
+    let mut raw = raw;
+
+    #[cfg(any(debug_assertions, test))]
+    if raw.text.trim().is_empty() {
+        if let Some(debug_text) = debug_transcript_override_text() {
+            log::info!(
+                "[coord] using debug transcript override (chars={})",
+                debug_text.chars().count()
+            );
+            raw.text = debug_text;
+        }
+    }
+
     if raw.text.trim().is_empty() {
         let session = DictationSession {
             id: Uuid::new_v4().to_string(),
@@ -1230,8 +1312,8 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let working_languages = prefs.working_languages.clone();
     let front_app = inner.state.lock().front_app.clone();
     let translation_target = prefs.translation_target_language.trim().to_string();
-    let translation_active = inner.translation_modifier_seen.load(Ordering::SeqCst)
-        && !translation_target.is_empty();
+    let translation_active =
+        inner.translation_modifier_seen.load(Ordering::SeqCst) && !translation_target.is_empty();
     let (polished, polish_error) = if translation_active {
         log::info!(
             "[coord] translation mode → target=\u{300C}{}\u{300D} working={:?} front_app={:?}",
@@ -1411,12 +1493,23 @@ fn hotkey_injection_dry_run_enabled() -> bool {
     std::env::var_os("OPENLESS_HOTKEY_INJECTION_DRY_RUN").is_some()
 }
 
-fn ensure_microphone_permission(inner: &Arc<Inner>) -> Result<(), String> {
+#[cfg(any(debug_assertions, test))]
+fn debug_transcript_override_text() -> Option<String> {
+    let path = std::env::var_os("OPENLESS_DEBUG_TRANSCRIPT_FILE")?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let trimmed = text.trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn ensure_microphone_permission(_inner: &Arc<Inner>) -> Result<(), String> {
     use crate::permissions::{self, PermissionStatus};
 
     #[cfg(target_os = "windows")]
     {
-        let _ = inner;
         if permissions::windows_microphone_access_explicitly_denied() {
             return Err("需要麦克风权限，当前状态: Denied".to_string());
         }
@@ -1431,11 +1524,10 @@ fn ensure_microphone_permission(inner: &Arc<Inner>) -> Result<(), String> {
         return Ok(());
     }
 
-    let requested = if let Some(app) = inner.app.lock().clone() {
-        crate::request_microphone_from_foreground(&app)
-    } else {
-        permissions::request_microphone()
-    };
+    // 听写路径不抢前台焦点：缺 mic 权限时直接请求系统授权，不再先 show_main_window。
+    // 用户在设置页手动点“请求权限”仍走 request_microphone_from_foreground，那是显式操作。
+    // 这里若系统不弹框，后续会通过 capsule error 引导用户主动去权限页处理。详见 #166。
+    let requested = permissions::request_microphone();
     if matches!(
         requested,
         PermissionStatus::Granted | PermissionStatus::NotApplicable
@@ -1638,6 +1730,8 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         state.front_app = capture_frontmost_app();
         state.selection = None;
     }
+    // 重置 SSE 取消标志：上一轮可能 set 过的 true 留着会让本轮流式立即 break。
+    inner.qa_stream_cancelled.store(false, Ordering::SeqCst);
 
     // 抓选区。每轮按 Option 都重新抓一次：用户多轮提问中可以重新选别处文字。
     // 浮窗 focus:false，原 app 仍是 frontmost，AX/Cmd+C fallback 都能拿到。
@@ -1702,11 +1796,7 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             *last = Some(now);
         }
         if let Some(app) = inner_for_level.app.lock().clone() {
-            let _ = app.emit_to(
-                "qa",
-                "qa:level",
-                serde_json::json!({ "level": level }),
-            );
+            let _ = app.emit_to("qa", "qa:level", serde_json::json!({ "level": level }));
         }
         // 同步把电平推给底部胶囊，让 QA 录音也有跟主听写一致的可视反馈。
         emit_capsule(
@@ -1720,8 +1810,11 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     });
 
     match Recorder::start(consumer, level_handler) {
-        Ok((rec, _runtime_errors)) => {
+        Ok((rec, runtime_errors)) => {
             *inner.qa_recorder.lock() = Some(rec);
+            // QA 也跟主听写一样监听 cpal runtime error。设备中途消失 / panic 时
+            // 不能让 QA 永远卡在 Recording 没反馈。详见 issue #168。
+            spawn_qa_recorder_error_monitor(inner, runtime_errors);
         }
         Err(e) => {
             log::error!("[coord] QA recorder start failed: {e}");
@@ -1778,11 +1871,7 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     emit_capsule(inner, CapsuleState::Transcribing, 0.0, 0, None, None);
 
     if let Some(app) = inner.app.lock().clone() {
-        let _ = app.emit_to(
-            "qa",
-            "qa:state",
-            serde_json::json!({ "kind": "loading" }),
-        );
+        let _ = app.emit_to("qa", "qa:state", serde_json::json!({ "kind": "loading" }));
     }
 
     if let Some(rec) = inner.qa_recorder.lock().take() {
@@ -1845,10 +1934,14 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
     };
 
-    inner.qa_state.lock().messages.push(crate::types::QaChatMessage {
-        role: "user".to_string(),
-        content: user_content,
-    });
+    inner
+        .qa_state
+        .lock()
+        .messages
+        .push(crate::types::QaChatMessage {
+            role: "user".to_string(),
+            content: user_content,
+        });
 
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
@@ -1874,8 +1967,17 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     // 流式回调：每个 SSE delta 立刻推一帧 qa:state{kind:"answer_delta"} 给前端，
     // 浮窗里气泡边收边长。最终的 messages 由 answer 事件统一下发（保证一致性）。
+    //
+    // session_id 守卫（issue #161）：闭包捕获本会话 id；用户取消 → 关浮窗 → 开新浮窗
+    // 开新一轮时，旧的 in-flight LLM 流仍可能 emit chunk，必须在 emit 前比对当前
+    // qa_state.session_id == 捕获 id，否则跳过——避免旧会话的字漏进新气泡。
+    let captured_session_id = inner.qa_state.lock().session_id;
     let inner_for_delta = Arc::clone(inner);
     let on_delta = move |chunk: &str| {
+        let cur_id = inner_for_delta.qa_state.lock().session_id;
+        if cur_id != captured_session_id {
+            return; // 旧 session 漏来的 chunk，丢弃
+        }
         if let Some(app) = inner_for_delta.app.lock().clone() {
             let _ = app.emit_to(
                 "qa",
@@ -1888,11 +1990,17 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
     };
 
+    // SSE 流取消旗标：cancel_qa_session / close_qa_panel 会 set true，
+    // polish 的 SSE loop 每帧检查 → break，释放 HTTP body。详见 issue #161。
+    let cancel_flag = Arc::clone(&inner.qa_stream_cancelled);
+    let should_cancel = move || cancel_flag.load(Ordering::Relaxed);
+
     let answer = match answer_chat_dispatch(
         &messages_for_llm,
         &working_languages,
         front_app.as_deref(),
         on_delta,
+        should_cancel,
     )
     .await
     {
@@ -1914,10 +2022,14 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Ok(());
     }
 
-    inner.qa_state.lock().messages.push(crate::types::QaChatMessage {
-        role: "assistant".to_string(),
-        content: answer.clone(),
-    });
+    inner
+        .qa_state
+        .lock()
+        .messages
+        .push(crate::types::QaChatMessage {
+            role: "assistant".to_string(),
+            content: answer.clone(),
+        });
 
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
@@ -2012,6 +2124,10 @@ fn cancel_qa_session(inner: &Arc<Inner>) {
         return;
     }
     inner.qa_state.lock().cancelled = true;
+    // SSE 流取消旗标——polish::chat_completion_history_streaming 的 loop 每帧检查
+    // 这个 flag，true 时立即 break 不再 drain HTTP body，避免取消后 LLM 仍烧 token。
+    // 详见 issue #161。
+    inner.qa_stream_cancelled.store(true, Ordering::SeqCst);
     if let Some(rec) = inner.qa_recorder.lock().take() {
         rec.stop();
     }
@@ -2026,14 +2142,16 @@ fn cancel_qa_session(inner: &Arc<Inner>) {
     log::info!("[coord] QA session cancelled (was {phase:?})");
 }
 
-async fn answer_chat_dispatch<F>(
+async fn answer_chat_dispatch<F, C>(
     messages: &[crate::types::QaChatMessage],
     working_languages: &[String],
     front_app: Option<&str>,
     on_delta: F,
+    should_cancel: C,
 ) -> anyhow::Result<String>
 where
     F: Fn(&str) + Send + Sync,
+    C: Fn() -> bool + Send + Sync,
 {
     let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
     if api_key.is_empty() {
@@ -2052,7 +2170,7 @@ where
     let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
     let provider = OpenAICompatibleLLMProvider::new(config);
     Ok(provider
-        .answer_chat_streaming(messages, working_languages, front_app, on_delta)
+        .answer_chat_streaming(messages, working_languages, front_app, on_delta, should_cancel)
         .await?)
 }
 
@@ -2194,6 +2312,14 @@ mod tests {
             SessionPhase::Listening
         );
         assert!(coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn window_hotkey_fallback_is_disabled_when_no_explicit_fallback_is_advertised() {
+        assert_eq!(
+            window_hotkey_fallback_enabled(),
+            crate::types::HotkeyCapability::current().explicit_fallback_available
+        );
     }
 }
 
@@ -2433,6 +2559,42 @@ fn show_capsule_window_no_activate() -> bool {
     false
 }
 
+#[cfg(target_os = "windows")]
+fn hide_capsule_window_if_present() {
+    use std::iter::once;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, SetWindowPos, ShowWindow, HWND_NOTOPMOST, SWP_HIDEWINDOW, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOSIZE, SW_HIDE,
+    };
+
+    let title: Vec<u16> = "OpenLess Capsule".encode_utf16().chain(once(0)).collect();
+    let hwnd = match unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) } {
+        Ok(hwnd) => hwnd,
+        Err(_) => return,
+    };
+    if hwnd == HWND::default() || hwnd.0.is_null() {
+        return;
+    }
+
+    let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+    let _ = unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_NOTOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW,
+        )
+    };
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hide_capsule_window_if_present() {}
+
 fn emit_capsule(
     inner: &Arc<Inner>,
     state: CapsuleState,
@@ -2454,6 +2616,11 @@ fn emit_capsule(
 
     let show_capsule = inner.prefs.get().show_capsule;
     if let Some(window) = app.get_webview_window("capsule") {
+        // 三平台统一：Done / Cancelled / Error 状态保留 ~1.5s toast
+        // （schedule_capsule_idle 之后会回 Idle 隐藏）。
+        // Windows 上 linger 的真实问题（截图选中 / 死区 / 拖拽卡顿）由 #140 加的
+        // `hide_capsule_window_if_present()` Win32 hard-hide 在 visible=false 分支
+        // 处理，不依赖把 Done/Cancelled/Error 打成 invisible。详见 PR #140 评论。
         let visible = !matches!(state, CapsuleState::Idle);
         maybe_position_capsule_bottom_center(inner, &window, payload.translation);
         if show_capsule && visible {
@@ -2469,6 +2636,7 @@ fn emit_capsule(
             #[cfg(target_os = "macos")]
             crate::restore_main_window_key_if_active(&app);
         } else {
+            hide_capsule_window_if_present();
             let _ = window.hide();
         }
     }
@@ -2511,7 +2679,6 @@ fn maybe_position_capsule_bottom_center<R: tauri::Runtime>(
     if crate::position_capsule_bottom_center(window, translation_active).is_ok() {
         let mut last = inner.capsule_layout.lock();
         *last = Some(next);
-        return;
     }
 }
 

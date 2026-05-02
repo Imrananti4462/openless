@@ -6,6 +6,7 @@ import { detectOS } from './components/WindowChrome';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
+  getHotkeyStatus,
   handleWindowHotkeyEvent,
   isTauri,
 } from './lib/ipc';
@@ -29,25 +30,68 @@ export function App({ isCapsule, isQa }: AppProps) {
 
   const os = detectOS();
   // Windows 启动不应被权限探测阻塞首屏。
-  const [gate, setGate] = useState<Gate>(isTauri && os !== 'win' ? 'checking' : 'ready');
+  const [gate, setGate] = useState<Gate>(isTauri ? 'checking' : 'ready');
 
   useEffect(() => {
     if (!isTauri) return;
+    if (os === 'win' && gate === 'checking') return;
     let cancelled = false;
     requestAnimationFrame(() => {
       if (cancelled) return;
       import('@tauri-apps/api/window')
-        .then(({ getCurrentWindow }) => getCurrentWindow().show())
+        .then(async ({ getCurrentWindow }) => {
+          const currentWindow = getCurrentWindow();
+          if (!(await currentWindow.isVisible())) {
+            await currentWindow.show();
+          }
+        })
         .catch(error => console.warn('[startup] show main window failed', error));
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [gate, os]);
 
   useEffect(() => {
-    if (!isTauri || os === 'win') return;
+    if (!isTauri) return;
     let cancelled = false;
+
+    if (os === 'win') {
+      // 超时保护：50 次 × 200ms = 10s。hotkey hook 永远 starting（被反作弊 / EDR
+      // / UAC 拦）时不让 UI 死锁灰屏，过 10s 强 setGate('ready') 让用户进
+      // Permissions 页看 hotkey_status.lastError 处理。详见 issue #163。
+      const POLL_INTERVAL_MS = 200;
+      const POLL_MAX_ATTEMPTS = 50;
+      const pollHotkeyStatus = async () => {
+        let attempts = 0;
+        while (!cancelled && attempts < POLL_MAX_ATTEMPTS) {
+          attempts += 1;
+          const status = await getHotkeyStatus();
+          if (cancelled) return;
+          if (status.state !== 'starting') {
+            setGate('ready');
+            return;
+          }
+          await new Promise(resolve => window.setTimeout(resolve, POLL_INTERVAL_MS));
+        }
+        if (!cancelled) {
+          console.warn(
+            `[startup] hotkey gate timed out after ${POLL_MAX_ATTEMPTS * POLL_INTERVAL_MS}ms; forcing ready so user can reach Permissions page`
+          );
+          setGate('ready');
+        }
+      };
+      void pollHotkeyStatus().catch(error => {
+        console.warn('[startup] hotkey status polling failed', error);
+        if (!cancelled) {
+          setGate('ready');
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     (async () => {
       const [a, m] = await Promise.all([
         checkAccessibilityPermission(),

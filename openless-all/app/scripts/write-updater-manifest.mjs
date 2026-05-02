@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const target = process.env.OPENLESS_UPDATE_TARGET;
 const arch = process.env.OPENLESS_UPDATE_ARCH;
 const repo = process.env.OPENLESS_UPDATE_REPO || 'appergb/openless';
+const mirrorBaseUrl = process.env.OPENLESS_UPDATE_MIRROR_BASE_URL || 'https://fastgit.cc/https://github.com';
 
 if (!target || !arch) {
   throw new Error('OPENLESS_UPDATE_TARGET and OPENLESS_UPDATE_ARCH are required');
@@ -52,12 +53,20 @@ if (!existsSync(signaturePath)) {
 
 const assetName = basename(artifact);
 const manifestName = `latest-${target}-${arch}.json`;
+const mirrorManifestName = `latest-${target}-${arch}-mirror.json`;
+const githubAssetUrl = `https://github.com/${repo}/releases/latest/download/${assetName}`;
+const mirrorAssetUrl = `${mirrorBaseUrl.replace(/\/$/, '')}/${repo}/releases/latest/download/${assetName}`;
 const manifest = {
   version: packageJson.version,
   pub_date: new Date().toISOString(),
-  url: `https://github.com/${repo}/releases/latest/download/${assetName}`,
+  url: githubAssetUrl,
   signature: readFileSync(signaturePath, 'utf8').trim(),
+};
+const mirrorManifest = {
+  ...manifest,
+  url: mirrorAssetUrl,
 };
 
 writeFileSync(join(bundleDir, manifestName), `${JSON.stringify(manifest, null, 2)}\n`);
-console.log(`Wrote ${manifestName} for ${assetName}`);
+writeFileSync(join(bundleDir, mirrorManifestName), `${JSON.stringify(mirrorManifest, null, 2)}\n`);
+console.log(`Wrote ${manifestName} and ${mirrorManifestName} for ${assetName}`);
