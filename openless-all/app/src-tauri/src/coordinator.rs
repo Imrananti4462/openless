@@ -56,6 +56,24 @@ enum ActiveAsr {
     Whisper(Arc<WhisperBatchASR>),
 }
 
+struct SessionResource<T> {
+    session_id: u64,
+    resource: T,
+}
+
+impl<T> SessionResource<T> {
+    fn new(session_id: u64, resource: T) -> Self {
+        Self {
+            session_id,
+            resource,
+        }
+    }
+
+    fn into_inner(self) -> T {
+        self.resource
+    }
+}
+
 struct SessionState {
     phase: SessionPhase,
     started_at: Instant,
@@ -104,8 +122,8 @@ struct Inner {
     #[cfg(target_os = "windows")]
     prepared_windows_ime_session: Arc<Mutex<Option<PreparedWindowsImeSessionSlot>>>,
     state: Mutex<SessionState>,
-    asr: Mutex<Option<ActiveAsr>>,
-    recorder: Mutex<Option<Recorder>>,
+    asr: Mutex<Option<SessionResource<ActiveAsr>>>,
+    recorder: Mutex<Option<SessionResource<Recorder>>>,
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
     hotkey_trigger_held: AtomicBool,
@@ -755,15 +773,72 @@ fn request_stop_during_starting(inner: &Arc<Inner>, reason: &str) {
     stop_recorder_if_pending_start_stop(inner);
 }
 
+fn take_session_resource<T>(slot: &mut Option<SessionResource<T>>, session_id: u64) -> Option<T> {
+    if slot
+        .as_ref()
+        .map(|resource| resource.session_id == session_id)
+        .unwrap_or(false)
+    {
+        slot.take().map(SessionResource::into_inner)
+    } else {
+        None
+    }
+}
+
+fn store_asr_for_session(inner: &Arc<Inner>, session_id: u64, asr: ActiveAsr) {
+    *inner.asr.lock() = Some(SessionResource::new(session_id, asr));
+}
+
+fn take_asr_for_session(inner: &Arc<Inner>, session_id: u64) -> Option<ActiveAsr> {
+    let mut slot = inner.asr.lock();
+    take_session_resource(&mut slot, session_id)
+}
+
+fn cancel_active_asr(asr: ActiveAsr) {
+    match asr {
+        ActiveAsr::Volcengine(v) => v.cancel(),
+        ActiveAsr::Whisper(w) => w.cancel(),
+    }
+}
+
+fn cancel_asr_for_session(inner: &Arc<Inner>, session_id: u64) {
+    if let Some(asr) = take_asr_for_session(inner, session_id) {
+        cancel_active_asr(asr);
+    }
+}
+
+fn store_recorder_for_session(inner: &Arc<Inner>, session_id: u64, recorder: Recorder) {
+    *inner.recorder.lock() = Some(SessionResource::new(session_id, recorder));
+}
+
+fn take_recorder_for_session(inner: &Arc<Inner>, session_id: u64) -> Option<Recorder> {
+    let mut slot = inner.recorder.lock();
+    take_session_resource(&mut slot, session_id)
+}
+
+fn stop_recorder_for_session(inner: &Arc<Inner>, session_id: u64) {
+    if let Some(recorder) = take_recorder_for_session(inner, session_id) {
+        recorder.stop();
+    }
+}
+
+fn discard_startup_resources_for_session(inner: &Arc<Inner>, session_id: u64) {
+    stop_recorder_for_session(inner, session_id);
+    cancel_asr_for_session(inner, session_id);
+}
+
 fn stop_recorder_if_pending_start_stop(inner: &Arc<Inner>) {
-    let should_stop = {
+    let (should_stop, session_id) = {
         let state = inner.state.lock();
-        state.phase == SessionPhase::Starting && state.pending_stop
+        (
+            state.phase == SessionPhase::Starting && state.pending_stop,
+            state.session_id,
+        )
     };
     if !should_stop {
         return;
     }
-    if let Some(rec) = inner.recorder.lock().take() {
+    if let Some(rec) = take_recorder_for_session(inner, session_id) {
         rec.stop();
         let elapsed = inner.state.lock().started_at.elapsed().as_millis() as u64;
         emit_capsule(inner, CapsuleState::Transcribing, 0.0, elapsed, None, None);
@@ -938,7 +1013,11 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
     if active_asr == "whisper" {
         let (api_key, base_url, model) = read_whisper_credentials();
         let whisper = Arc::new(WhisperBatchASR::new(api_key, base_url, model));
-        *inner.asr.lock() = Some(ActiveAsr::Whisper(Arc::clone(&whisper)));
+        store_asr_for_session(
+            inner,
+            current_session_id,
+            ActiveAsr::Whisper(Arc::clone(&whisper)),
+        );
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = whisper;
         start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer)
             .await?;
@@ -948,7 +1027,11 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         let asr = Arc::new(VolcengineStreamingASR::new(creds, hotwords));
         let bridge = Arc::new(DeferredAsrBridge::new());
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = bridge.clone();
-        *inner.asr.lock() = Some(ActiveAsr::Volcengine(Arc::clone(&asr)));
+        store_asr_for_session(
+            inner,
+            current_session_id,
+            ActiveAsr::Volcengine(Arc::clone(&asr)),
+        );
         start_recorder_for_starting(inner, current_session_id, &active_asr, consumer)?;
 
         if let Err(e) = asr.open_session().await {
@@ -959,26 +1042,20 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
                         "[coord] stale ASR open_session error from session {current_session_id} — ignoring"
                     );
                     asr.cancel();
+                    discard_startup_resources_for_session(inner, current_session_id);
                     restore_prepared_windows_ime_session(inner, current_session_id);
                     return Ok(());
                 }
                 StartupRaceStatus::CancelRaced => {
                     asr.cancel();
+                    discard_startup_resources_for_session(inner, current_session_id);
                     restore_prepared_windows_ime_session(inner, current_session_id);
                     set_phase_idle_if_session_matches(inner, current_session_id);
                     return Ok(());
                 }
                 StartupRaceStatus::ActiveStarting => {}
             }
-            if let Some(rec) = inner.recorder.lock().take() {
-                rec.stop();
-            }
-            if let Some(asr) = inner.asr.lock().take() {
-                match asr {
-                    ActiveAsr::Volcengine(v) => v.cancel(),
-                    ActiveAsr::Whisper(w) => w.cancel(),
-                }
-            }
+            discard_startup_resources_for_session(inner, current_session_id);
             emit_capsule(
                 inner,
                 CapsuleState::Error,
@@ -1000,9 +1077,7 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
             StartupRaceStatus::CancelRaced => {
                 log::info!("[coord] cancel raced during ASR open_session — aborting begin");
                 asr.cancel();
-                if let Some(rec) = inner.recorder.lock().take() {
-                    rec.stop();
-                }
+                discard_startup_resources_for_session(inner, current_session_id);
                 restore_prepared_windows_ime_session(inner, current_session_id);
                 set_phase_idle_if_session_matches(inner, current_session_id);
                 return Ok(());
@@ -1012,6 +1087,7 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
                     "[coord] stale ASR open_session continuation from session {current_session_id} — ignoring"
                 );
                 asr.cancel();
+                discard_startup_resources_for_session(inner, current_session_id);
                 restore_prepared_windows_ime_session(inner, current_session_id);
                 return Ok(());
             }
@@ -1070,19 +1146,14 @@ fn start_recorder_for_starting(
 
     match Recorder::start(consumer, level_handler) {
         Ok((rec, runtime_errors)) => {
-            *inner.recorder.lock() = Some(rec);
+            store_recorder_for_session(inner, session_id, rec);
             spawn_recorder_error_monitor(inner, runtime_errors);
             stop_recorder_if_pending_start_stop(inner);
             log::info!("[coord] recorder started (asr={active_asr}, phase=Starting)");
         }
         Err(e) => {
             log::error!("[coord] recorder start failed: {e}");
-            if let Some(asr) = inner.asr.lock().take() {
-                match asr {
-                    ActiveAsr::Volcengine(v) => v.cancel(),
-                    ActiveAsr::Whisper(w) => w.cancel(),
-                }
-            }
+            cancel_asr_for_session(inner, session_id);
             emit_capsule(
                 inner,
                 CapsuleState::Error,
@@ -1173,15 +1244,7 @@ fn abort_recording_with_error(inner: &Arc<Inner>, message: String) {
         )
     };
 
-    if let Some(rec) = inner.recorder.lock().take() {
-        rec.stop();
-    }
-    if let Some(asr) = inner.asr.lock().take() {
-        match asr {
-            ActiveAsr::Volcengine(v) => v.cancel(),
-            ActiveAsr::Whisper(w) => w.cancel(),
-        }
-    }
+    discard_startup_resources_for_session(inner, session_id);
     restore_prepared_windows_ime_session(inner, session_id);
 
     emit_capsule(
@@ -1231,19 +1294,12 @@ async fn finish_starting_session(inner: &Arc<Inner>, session_id: u64) {
             log::info!(
                 "[coord] stale recorder/ASR startup continuation from session {session_id} — ignoring"
             );
+            discard_startup_resources_for_session(inner, session_id);
             restore_prepared_windows_ime_session(inner, session_id);
         }
         BeginOutcome::CancelRaced => {
             log::info!("[coord] cancel raced during recorder/ASR startup — aborting begin");
-            if let Some(rec) = inner.recorder.lock().take() {
-                rec.stop();
-            }
-            if let Some(asr) = inner.asr.lock().take() {
-                match asr {
-                    ActiveAsr::Volcengine(v) => v.cancel(),
-                    ActiveAsr::Whisper(w) => w.cancel(),
-                }
-            }
+            discard_startup_resources_for_session(inner, session_id);
             restore_prepared_windows_ime_session(inner, session_id);
             set_phase_idle_if_session_matches(inner, session_id);
         }
@@ -1270,11 +1326,11 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let elapsed = inner.state.lock().started_at.elapsed().as_millis() as u64;
     emit_capsule(inner, CapsuleState::Transcribing, 0.0, elapsed, None, None);
 
-    if let Some(rec) = inner.recorder.lock().take() {
+    if let Some(rec) = take_recorder_for_session(inner, current_session_id) {
         rec.stop();
     }
 
-    let asr_opt = inner.asr.lock().take();
+    let asr_opt = take_asr_for_session(inner, current_session_id);
     let asr = match asr_opt {
         Some(a) => a,
         None => {
@@ -1581,15 +1637,8 @@ fn cancel_session(inner: &Arc<Inner>) {
         (phase, state.session_id)
     };
 
-    if let Some(rec) = inner.recorder.lock().take() {
-        rec.stop();
-    }
-    if let Some(asr) = inner.asr.lock().take() {
-        match asr {
-            ActiveAsr::Volcengine(v) => v.cancel(),
-            ActiveAsr::Whisper(w) => w.cancel(),
-        }
-    }
+    stop_recorder_for_session(inner, session_id);
+    cancel_asr_for_session(inner, session_id);
     restore_prepared_windows_ime_session(inner, session_id);
     // Processing 阶段保持 phase=Processing 让 end_session 自己走完检查 + 收尾；
     // 其他阶段直接转 Idle。
@@ -2621,6 +2670,36 @@ mod tests {
             startup_race_status(&state, 1),
             StartupRaceStatus::StaleContinuation
         );
+    }
+
+    #[test]
+    fn stale_startup_cleanup_keeps_newer_asr_resource() {
+        let coordinator = Coordinator::new();
+        let newer_asr = Arc::new(WhisperBatchASR::new(
+            "key".to_string(),
+            "http://localhost".to_string(),
+            "model".to_string(),
+        ));
+        *coordinator.inner.asr.lock() = Some(SessionResource::new(
+            2,
+            ActiveAsr::Whisper(Arc::clone(&newer_asr)),
+        ));
+
+        discard_startup_resources_for_session(&coordinator.inner, 1);
+
+        assert_eq!(
+            coordinator
+                .inner
+                .asr
+                .lock()
+                .as_ref()
+                .map(|resource| resource.session_id),
+            Some(2)
+        );
+
+        discard_startup_resources_for_session(&coordinator.inner, 2);
+
+        assert!(coordinator.inner.asr.lock().is_none());
     }
 }
 

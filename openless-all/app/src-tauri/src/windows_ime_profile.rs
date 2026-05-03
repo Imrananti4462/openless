@@ -243,12 +243,29 @@ mod windows_impl {
         if profile.dwProfileType == TF_PROFILETYPE_INPUTPROCESSOR {
             Ok(ImeProfileSnapshot::text_service(
                 profile.langid,
-                format!("{:?}", profile.clsid),
-                format!("{:?}", profile.guidProfile),
+                guid_to_braced_string(profile.clsid),
+                guid_to_braced_string(profile.guidProfile),
             ))
         } else {
             keyboard_layout_snapshot_from_tsf(profile.langid, profile.hkl)
         }
+    }
+
+    pub(super) fn guid_to_braced_string(guid: GUID) -> String {
+        format!(
+            "{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
+            guid.data1,
+            guid.data2,
+            guid.data3,
+            guid.data4[0],
+            guid.data4[1],
+            guid.data4[2],
+            guid.data4[3],
+            guid.data4[4],
+            guid.data4[5],
+            guid.data4[6],
+            guid.data4[7],
+        )
     }
 
     pub fn activate_openless_profile() -> WindowsImeProfileResult<()> {
@@ -656,5 +673,14 @@ mod windows_tests {
         assert!(err
             .to_string()
             .contains("active keyboard layout profile has no HKL"));
+    }
+
+    #[test]
+    fn guid_snapshot_strings_are_canonical_and_parseable() {
+        let guid = windows::core::GUID::from_u128(0x6b9f3f4f_5ee7_42d6_9c61_9f80b03a5d7d);
+        let formatted = windows_impl::guid_to_braced_string(guid);
+
+        assert_eq!(formatted, "{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}");
+        assert!(parse_guid(&formatted).is_ok());
     }
 }
