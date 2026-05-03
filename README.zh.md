@@ -10,6 +10,10 @@
 </p>
 
 <p align="center">
+  <a href="https://openless.top"><strong>🌐 官方网站 — openless.top</strong></a>
+</p>
+
+<p align="center">
   <a href="README.md">English</a> · <a href="README.zh.md">中文</a>
 </p>
 
@@ -59,7 +63,7 @@
 
 ---
 
-OpenLess 是一个跨平台（macOS & Windows）语音输入应用，对标 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、[Lazy](https://heylazy.com)、Superwhisper 等商业语音输入工具的 **完全开源** 替代品。
+OpenLess 是一个跨平台（macOS & Windows）语音输入应用，对标 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、[Lazy](https://heylazy.com)、Superwhisper 等商业语音输入工具的 **完全开源** 替代品。官方网站：[openless.top](https://openless.top)。
 
 把光标放在 ChatGPT、Claude、Cursor、Notion、邮件、聊天框任意输入框里，按一次全局快捷键说话——OpenLess 会录音、转写、按你选的模式润色，把结果直接插入光标位置。插入失败时会自动复制到剪贴板，尽量保证「你说过的话不丢」。
 
