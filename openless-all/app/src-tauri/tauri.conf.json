@@ -26,6 +26,7 @@
         "shadow": true,
         "hiddenTitle": true,
         "titleBarStyle": "Overlay",
+        "trafficLightPosition": { "x": 14, "y": 20 },
         "visible": false,
         "acceptFirstMouse": true
       },

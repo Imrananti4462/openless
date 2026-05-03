@@ -261,12 +261,12 @@ export function Capsule() {
   const { t } = useTranslation();
   const os = detectOS();
   const metrics = getCapsulePillMetrics(os);
-  const [translation, setTranslation] = useState<boolean>(false);
-  const hostMetrics = getCapsuleHostMetrics(os, translation);
+  const hostMetrics = getCapsuleHostMetrics(os, false);
   const [state, setState] = useState<CapsuleState>(isTauri ? 'idle' : 'recording');
   const [level, setLevel] = useState<number>(isTauri ? 0 : 0.6);
   const [insertedChars, setInsertedChars] = useState<number>(0);
   const [message, setMessage] = useState<string | undefined>();
+  const [translation, setTranslation] = useState<boolean>(false);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -318,7 +318,7 @@ export function Capsule() {
           : 0,
         paddingBottom: os === 'win' ? hostMetrics.bottomInset : 0,
         background: 'transparent',
-        animation: os === 'win' ? 'none' : 'capsule-in .28s var(--ol-motion-spring)',
+        animation: os === 'win' ? 'none' : 'capsule-in .22s cubic-bezier(.2,.9,.3,1.1)',
       }}
     >
       {/* "正在翻译" 徽章 — 嵌套两层：
@@ -329,9 +329,11 @@ export function Capsule() {
         style={{
           position: 'absolute',
           left: '50%',
-          // bottom = 50%（pill 中线）+ pill 半高 21px（capsuleLayout mac=42）+ 8px 间隔。
-          // 只有翻译徽章可见时才需要额外高度；普通录音/转写状态由后端缩到 pill 本体，避免透明死区。
-          bottom: `${hostMetrics.bottomInset + metrics.height + hostMetrics.badgeGap}px`,
+          // macOS / Linux：胶囊窗口 220×110、pill 居中，badge 锚到 pill 中线上方 21+8。
+          // Windows：pill 不居中（带 12pt 阴影 inset），用 hostMetrics 量到底部 inset + pill 高 + gap。
+          bottom: os === 'win'
+            ? `${hostMetrics.bottomInset + metrics.height + hostMetrics.badgeGap}px`
+            : 'calc(50% + 21px + 8px)',
           transform: 'translateX(-50%)',
           pointerEvents: 'none',
         }}
@@ -357,9 +359,8 @@ export function Capsule() {
             opacity: translation ? 1 : 0,
             transform: translation ? 'translateY(0) scale(1)' : 'translateY(40px) scale(.88)',
             transformOrigin: 'center bottom',
-            transition: 'opacity .24s var(--ol-motion-soft), transform .34s var(--ol-motion-spring), filter .24s var(--ol-motion-soft)',
-            filter: translation ? 'blur(0)' : 'blur(4px)',
-            willChange: 'opacity, transform, filter',
+            transition: 'opacity .24s ease-out, transform .34s cubic-bezier(.2,.9,.3,1.1)',
+            willChange: 'opacity, transform',
           }}
         >
           <span style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--ol-blue)' }} />
@@ -377,8 +378,8 @@ export function Capsule() {
       />
       <style>{`
         @keyframes capsule-in {
-          from { opacity: 0; transform: translateY(6px) scale(.96); filter: blur(8px); }
-          to   { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+          from { opacity: 0; transform: translateY(6px) scale(.96); }
+          to   { opacity: 1; transform: translateY(0) scale(1); }
         }
         @keyframes cap-dot {
           0%, 100% { opacity: 0.3; transform: scale(0.8); }

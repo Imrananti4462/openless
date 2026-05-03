@@ -73,6 +73,20 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
   const [helpPopoverOpen, setHelpPopoverOpen] = useState(false);
 
+  // tab 切换的 cross-fade：旧页 blur+fade out（180ms），结束后挂载新页（走 ol-page-slide enter）。
+  // displayTab 是实际渲染的 tab，currentTab 是用户点中的目标 tab。
+  const [displayTab, setDisplayTab] = useState<AppTab>(initialTab);
+  const [tabPhase, setTabPhase] = useState<'idle' | 'exiting'>('idle');
+  useEffect(() => {
+    if (currentTab === displayTab) return;
+    setTabPhase('exiting');
+    const id = window.setTimeout(() => {
+      setDisplayTab(currentTab);
+      setTabPhase('idle');
+    }, 180);
+    return () => window.clearTimeout(id);
+  }, [currentTab, displayTab]);
+
   // 字体档位 — 启动时按 localStorage 应用一次；之后改动来自 Settings 的"个性化"section。
   useEffect(() => {
     applyFontScale(readFontScale());
@@ -96,7 +110,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
     () => NAV_BASE.map(b => ({ ...b, name: t(`nav.${b.id}`) })),
     [t],
   );
-  const Page = (NAV.find((n) => n.id === currentTab) ?? NAV[0]).cmp;
+  const Page = (NAV.find((n) => n.id === displayTab) ?? NAV[0]).cmp;
 
   useEffect(() => {
     let cancelled = false;
@@ -147,7 +161,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   };
 
   return (
-    <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0, paddingTop: os === 'mac' ? 30 : 0 }}>
+    <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0, paddingTop: os === 'mac' ? 28 : 0 }}>
 
       {/* Main shell — flush with the frosted backplate (no separate float). */}
       <div
@@ -237,25 +251,29 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
               flexDirection: 'column',
             }}
           >
-            {/* key={currentTab} 让每次切换重挂这棵子树 → ol-page-slide keyframe 重新触发。
+            {/* key={displayTab} 让每次切换重挂这棵子树 → ol-page-slide keyframe 重新触发。
+                旧 tab 退出时不立刻 unmount，而是先播 ol-page-fadeout（blur+淡出），
+                180ms 后再切到新 tab 并播入场动画。详见 displayTab/tabPhase 的 effect。
                 padding + overflow:auto 直接挂在这棵 wrapper 上：
                   - 自然高度的页（Overview / Vocab / Style）—— 整页内容超出时 wrapper 出现滚动条
                   - 用 height:100% 撑满的页（History 左右双列）—— 100% 能解析到 wrapper 的固定高度，
                     两列内部各自的 overflow:auto 才能独立滚动 */}
             <div
-              key={currentTab}
+              key={displayTab}
               style={{
                 flex: 1, minHeight: 0,
                 overflow: 'auto',
                 padding: '24px 28px 32px',
                 // 苹果"spring out"风格的曲线：开始快、收尾顺滑，符合人体直觉
-                animation: 'ol-page-slide 0.34s var(--ol-motion-spring) both',
+                animation: tabPhase === 'exiting'
+                  ? 'ol-page-fadeout 0.18s var(--ol-motion-soft) forwards'
+                  : 'ol-page-slide 0.34s var(--ol-motion-spring) both',
                 willChange: 'opacity, transform, filter',
                 display: 'flex',
                 flexDirection: 'column',
               }}
             >
-              {currentTab === 'overview' ? (
+              {displayTab === 'overview' ? (
                 <Overview onOpenHistory={() => setCurrentTab('history')} />
               ) : (
                 <Page />
@@ -326,6 +344,10 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
         @keyframes ol-page-slide {
           from { opacity: 0; transform: translate3d(10px, 0, 0) scale(.996); filter: blur(6px); }
           to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); }
+        }
+        @keyframes ol-page-fadeout {
+          from { opacity: 1; filter: blur(0); }
+          to   { opacity: 0; filter: blur(8px); }
         }
         @keyframes ol-prompt-fade {
           from { opacity: 0; backdrop-filter: blur(0); -webkit-backdrop-filter: blur(0); }

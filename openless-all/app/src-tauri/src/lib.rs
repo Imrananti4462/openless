@@ -758,9 +758,12 @@ fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
 
     #[cfg(not(target_os = "windows"))]
     {
+        // macOS / Linux：固定 220×110，与 1.2.11 行为一致 — 录音 / 翻译徽章
+        // 共用同一个窗口尺寸，避免按 Shift 后窗口高度变化导致胶囊整体下移。
+        let _ = translation_active;
         CapsuleWindowBounds {
-            width: 176.0,
-            height: if translation_active { 110.0 } else { 42.0 },
+            width: 220.0,
+            height: 110.0,
             bottom_inset: 0.0,
         }
     }
@@ -774,7 +777,7 @@ fn capsule_visual_height(_translation_active: bool) -> f64 {
 
     #[cfg(not(target_os = "windows"))]
     {
-        42.0
+        96.0
     }
 }
 
@@ -793,7 +796,7 @@ mod tests {
         assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 84.0, 12.0));
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (176.0, 42.0, 0.0));
+        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 110.0, 0.0));
     }
 
     #[test]
@@ -803,7 +806,7 @@ mod tests {
         assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 118.0, 12.0));
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (176.0, 110.0, 0.0));
+        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 110.0, 0.0));
     }
 
     #[test]
@@ -812,7 +815,7 @@ mod tests {
         assert_eq!(capsule_visual_height(true), 52.0);
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!(capsule_visual_height(true), 42.0);
+        assert_eq!(capsule_visual_height(true), 96.0);
     }
 
     #[test]
@@ -821,6 +824,6 @@ mod tests {
         assert_eq!(capsule_height_for_qa(), 52.0);
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!(capsule_height_for_qa(), 42.0);
+        assert_eq!(capsule_height_for_qa(), 96.0);
     }
 }

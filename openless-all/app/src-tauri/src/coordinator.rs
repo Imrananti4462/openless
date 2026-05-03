@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -2505,7 +2505,7 @@ fn restore_focus_target_if_possible(target: Option<usize>) -> bool {
         let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
     }
     let _ = unsafe { SetForegroundWindow(hwnd) };
-    std::thread::sleep(Duration::from_millis(60));
+    std::thread::sleep(std::time::Duration::from_millis(60));
 
     let foreground = unsafe { GetForegroundWindow() };
     if foreground != hwnd {
@@ -2518,39 +2518,6 @@ fn restore_focus_target_if_possible(target: Option<usize>) -> bool {
 #[cfg(not(target_os = "windows"))]
 fn restore_focus_target_if_possible(_target: Option<usize>) -> bool {
     true
-}
-
-#[cfg(target_os = "macos")]
-fn show_capsule_window_no_activate<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    window: &tauri::WebviewWindow<R>,
-) -> bool {
-    let window = window.clone();
-    let (tx, rx) = mpsc::channel();
-    let _ = app.run_on_main_thread(move || {
-        use objc2::msg_send;
-        use objc2::runtime::AnyObject;
-
-        let ok = match window.ns_window() {
-            Ok(handle) => {
-                let ns = handle as *mut AnyObject;
-                if ns.is_null() {
-                    false
-                } else {
-                    unsafe {
-                        let _: () = msg_send![ns, orderFrontRegardless];
-                    }
-                    true
-                }
-            }
-            Err(e) => {
-                log::warn!("[capsule] ns_window unavailable for no-activate show: {e}");
-                false
-            }
-        };
-        let _ = tx.send(ok);
-    });
-    rx.recv_timeout(Duration::from_millis(800)).unwrap_or(false)
 }
 
 #[cfg(target_os = "windows")]
@@ -2588,7 +2555,11 @@ fn show_capsule_window_no_activate<R: tauri::Runtime>(
     true
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+// macOS / Linux 上不走 no-activate 路径：胶囊由 emit_capsule 的 fallback
+// `window.show()` 直接显示，再用 restore_main_window_key_if_active 把焦点还给
+// 主窗口。这是 1.2.11 的实现 — 单独走 orderFrontRegardless 会让胶囊在 webview
+// 未完整初始化时偶发不可见。
+#[cfg(not(target_os = "windows"))]
 fn show_capsule_window_no_activate<R: tauri::Runtime>(
     _app: &AppHandle<R>,
     _window: &tauri::WebviewWindow<R>,

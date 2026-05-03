@@ -16,7 +16,7 @@ export function detectOS(): OS {
   return 'mac';
 }
 
-const MAC_TITLEBAR_HEIGHT = 30;
+const MAC_TITLEBAR_HEIGHT = 28;
 const MAC_SYSTEM_CONTROLS_RESERVED_WIDTH = 76;
 export const WIN_TITLEBAR_HEIGHT = 36;
 export const WIN_WINDOW_RADIUS = 10;
