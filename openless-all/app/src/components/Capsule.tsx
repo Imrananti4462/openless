@@ -39,7 +39,7 @@ function AudioBars({ level }: AudioBarsProps) {
             borderRadius: 999,
             background: 'var(--ol-blue)',
             opacity: 0.82,
-            transition: 'height 0.06s linear',
+            transition: 'height 0.08s var(--ol-motion-quick)',
           }}
         />
       ))}
@@ -59,7 +59,7 @@ function ProcessingDots() {
             borderRadius: 999,
             background: 'var(--ol-blue)',
             opacity: 0.85,
-            animation: `cap-dot 0.9s linear ${i * 0.3}s infinite`,
+            animation: `cap-dot 0.9s var(--ol-motion-soft) ${i * 0.3}s infinite`,
           }}
         />
       ))}
@@ -130,7 +130,7 @@ function CircleButton({ variant, enabled, onClick }: CircleButtonProps) {
         flexShrink: 0,
         padding: 0,
         boxShadow: '0 1px 2px rgba(0, 0, 0, 0.06)',
-        transition: 'opacity 0.15s ease-out, background 0.12s ease-out, transform 0.08s ease-out',
+        transition: 'opacity 0.18s var(--ol-motion-soft), background 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick)',
       }}
     >
       {isCancel ? (
@@ -243,7 +243,7 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
         fontFamily: 'var(--ol-font-sans)',
         transform: `scale(${scale.toFixed(4)})`,
         transformOrigin: 'center',
-        transition: 'transform 0.06s linear, box-shadow 0.06s linear',
+        transition: 'transform 0.08s var(--ol-motion-quick), box-shadow 0.08s var(--ol-motion-quick)',
         willChange: 'transform, box-shadow',
         filter: dropShadow,
       }}
@@ -318,7 +318,7 @@ export function Capsule() {
           : 0,
         paddingBottom: os === 'win' ? hostMetrics.bottomInset : 0,
         background: 'transparent',
-        animation: os === 'win' ? 'none' : 'capsule-in .22s cubic-bezier(.2,.9,.3,1.1)',
+        animation: os === 'win' ? 'none' : 'capsule-in .28s var(--ol-motion-spring)',
       }}
     >
       {/* "正在翻译" 徽章 — 嵌套两层：
@@ -357,8 +357,9 @@ export function Capsule() {
             opacity: translation ? 1 : 0,
             transform: translation ? 'translateY(0) scale(1)' : 'translateY(40px) scale(.88)',
             transformOrigin: 'center bottom',
-            transition: 'opacity .24s ease-out, transform .34s cubic-bezier(.2,.9,.3,1.1)',
-            willChange: 'opacity, transform',
+            transition: 'opacity .24s var(--ol-motion-soft), transform .34s var(--ol-motion-spring), filter .24s var(--ol-motion-soft)',
+            filter: translation ? 'blur(0)' : 'blur(4px)',
+            willChange: 'opacity, transform, filter',
           }}
         >
           <span style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--ol-blue)' }} />
@@ -376,8 +377,8 @@ export function Capsule() {
       />
       <style>{`
         @keyframes capsule-in {
-          from { opacity: 0; transform: translateY(6px) scale(.96); }
-          to   { opacity: 1; transform: translateY(0) scale(1); }
+          from { opacity: 0; transform: translateY(6px) scale(.96); filter: blur(8px); }
+          to   { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
         }
         @keyframes cap-dot {
           0%, 100% { opacity: 0.3; transform: scale(0.8); }

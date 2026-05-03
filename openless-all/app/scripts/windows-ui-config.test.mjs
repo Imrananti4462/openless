@@ -22,6 +22,7 @@ const capsuleTsx = await readFile(new URL('../src/components/Capsule.tsx', impor
 const capsuleLayoutTs = await readFile(new URL('../src/lib/capsuleLayout.ts', import.meta.url), 'utf-8');
 const windowChromeTsx = await readFile(new URL('../src/components/WindowChrome.tsx', import.meta.url), 'utf-8');
 const floatingShellTsx = await readFile(new URL('../src/components/FloatingShell.tsx', import.meta.url), 'utf-8');
+const tokensCss = await readFile(new URL('../src/styles/tokens.css', import.meta.url), 'utf-8');
 
 if (!capsuleWindow) {
   throw new Error('capsule window config missing');
@@ -51,6 +52,22 @@ assertMatch(
 if (!/function WindowsResizeHandles\(\)/.test(windowChromeTsx)) {
   throw new Error('windows frameless shell should expose explicit resize handles');
 }
+
+assertMatch(
+  windowChromeTsx,
+  /const MAC_TITLEBAR_HEIGHT = 30;/,
+  'macOS titlebar spacer should stay visually compact around the native traffic lights',
+);
+assertMatch(
+  libRs,
+  /fn tune_macos_main_window_controls[\s\S]*?standardWindowButton[\s\S]*?TRAFFIC_LIGHT_TOP_INSET/,
+  'macOS main window should explicitly center native traffic lights in the compact top band',
+);
+assertMatch(
+  tokensCss,
+  /--ol-motion-spring:[\s\S]*?--ol-motion-soft:[\s\S]*?--ol-motion-quick:/,
+  'shared motion tokens should drive shell animations and transitions',
+);
 
 if (!/startResizeDragging\(direction\)/.test(windowChromeTsx)) {
   throw new Error('windows resize handles should delegate edge dragging to Tauri');

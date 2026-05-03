@@ -76,7 +76,7 @@ export function Translation() {
                     color: checked ? '#fff' : 'var(--ol-ink-2)',
                     cursor: 'default',
                     fontFamily: 'inherit',
-                    transition: 'background 0.12s ease-out, color 0.12s ease-out',
+                    transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
                   }}
                 >
                   {lang}

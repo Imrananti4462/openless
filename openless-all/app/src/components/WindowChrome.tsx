@@ -16,8 +16,8 @@ export function detectOS(): OS {
   return 'mac';
 }
 
-const MAC_TITLEBAR_HEIGHT = 36;
-const MAC_SYSTEM_CONTROLS_RESERVED_WIDTH = 80;
+const MAC_TITLEBAR_HEIGHT = 30;
+const MAC_SYSTEM_CONTROLS_RESERVED_WIDTH = 76;
 export const WIN_TITLEBAR_HEIGHT = 36;
 export const WIN_WINDOW_RADIUS = 10;
 export const WIN_CONSOLE_RADIUS = 10;
@@ -72,8 +72,11 @@ export function WindowChrome({
           radial-gradient(100% 70% at 100% 100%, rgba(37,99,235,0.07) 0%, rgba(37,99,235,0) 55%),
           linear-gradient(180deg, rgba(245,245,247,0.92) 0%, rgba(232,232,236,0.92) 100%)
         `,
-        backdropFilter: 'blur(40px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(40px) saturate(180%)',
+        backdropFilter: 'blur(var(--ol-glass-blur-strong)) saturate(190%)',
+        WebkitBackdropFilter: 'blur(var(--ol-glass-blur-strong)) saturate(190%)',
+        animation: os === 'win' ? undefined : 'ol-window-enter 0.42s var(--ol-motion-spring) both',
+        transition: 'box-shadow 0.28s var(--ol-motion-soft), border-color 0.28s var(--ol-motion-soft), backdrop-filter 0.28s var(--ol-motion-soft)',
+        willChange: 'opacity, transform, filter',
       } as CSSProperties}
     >
       {os === 'win' && <WinTitleBar title={title} />}
@@ -246,5 +249,5 @@ const winBtnStyle: CSSProperties = {
   justifyContent: 'center',
   color: 'var(--ol-ink-3)',
   cursor: 'default',
-  transition: 'background 0.12s ease-out, color 0.12s ease-out',
+  transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
 };

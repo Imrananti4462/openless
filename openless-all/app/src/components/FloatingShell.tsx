@@ -151,7 +151,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   };
 
   return (
-    <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0, paddingTop: os === 'mac' ? 36 : 0 }}>
+    <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0, paddingTop: os === 'mac' ? 30 : 0 }}>
 
       {/* Main shell — flush with the frosted backplate (no separate float). */}
       <div
@@ -171,11 +171,11 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
             flexShrink: 0,
             display: 'flex', flexDirection: 'column',
             background: 'transparent',
-            padding: '14px 10px 12px',
+            padding: '10px 10px 12px',
           }}>
 
           {/* brand */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '4px 8px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '2px 8px 12px' }}>
             <img
               src="AppIcon.png"
               alt="OpenLess"
@@ -206,7 +206,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
                     fontFamily: 'inherit', fontSize: 13, fontWeight: active ? 600 : 500,
                     boxShadow: active ? '0 1px 2px rgba(0,0,0,.05), 0 0 0 0.5px rgba(0,0,0,.06)' : 'none',
                     cursor: 'default',
-                    transition: 'background 0.12s ease-out, color 0.12s ease-out, box-shadow 0.12s ease-out',
+                    transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft)',
                     textAlign: 'left',
                   }}>
 
@@ -249,7 +249,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
 
         {/* Main content — inset white card sitting on the frosted backplate.
             内卡圆角与外层窗口（WindowChrome 20/14）对齐，避免视觉上"两个不一致的圆角"。 */}
-        <div style={{ flex: 1, minWidth: 0, padding: '6px 8px 6px 0', display: 'flex' }}>
+        <div style={{ flex: 1, minWidth: 0, padding: '4px 8px 6px 0', display: 'flex' }}>
           <main
             style={{
               flex: 1, minWidth: 0,
@@ -274,8 +274,8 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
                 overflow: 'auto',
                 padding: '24px 28px 32px',
                 // 苹果"spring out"风格的曲线：开始快、收尾顺滑，符合人体直觉
-                animation: 'ol-page-slide 0.32s cubic-bezier(0.32, 0.72, 0, 1) both',
-                willChange: 'opacity, transform',
+                animation: 'ol-page-slide 0.34s var(--ol-motion-spring) both',
+                willChange: 'opacity, transform, filter',
                 display: 'flex',
                 flexDirection: 'column',
               }}
@@ -349,17 +349,20 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
       {/* tab 切换 + provider prompt + footer popover 公用的入场关键帧 */}
       <style>{`
         @keyframes ol-page-slide {
-          from { opacity: 0; transform: translate3d(14px, 0, 0); }
-          to   { opacity: 1; transform: translate3d(0, 0, 0); }
+          from { opacity: 0; transform: translate3d(10px, 0, 0) scale(.996); filter: blur(6px); }
+          to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); }
         }
-        @keyframes ol-prompt-fade { from { opacity: 0 } to { opacity: 1 } }
+        @keyframes ol-prompt-fade {
+          from { opacity: 0; backdrop-filter: blur(0); -webkit-backdrop-filter: blur(0); }
+          to   { opacity: 1; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+        }
         @keyframes ol-prompt-pop {
-          from { opacity: 0; transform: translateY(6px) scale(.97); }
-          to   { opacity: 1; transform: translateY(0) scale(1); }
+          from { opacity: 0; transform: translateY(6px) scale(.97); filter: blur(6px); }
+          to   { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
         }
         @keyframes ol-popover-pop {
-          from { opacity: 0; transform: translateY(6px) scale(.96); }
-          to   { opacity: 1; transform: translateY(0) scale(1); }
+          from { opacity: 0; transform: translateY(6px) scale(.96); filter: blur(6px); }
+          to   { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
         }
       `}</style>
     </div>
@@ -379,9 +382,9 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
         justifyContent: 'center',
         padding: 28,
         background: 'rgba(15,17,22,0.28)',
-        backdropFilter: 'blur(2px)',
-        WebkitBackdropFilter: 'blur(2px)',
-        animation: 'ol-prompt-fade 0.18s ease-out',
+        backdropFilter: 'blur(6px) saturate(140%)',
+        WebkitBackdropFilter: 'blur(6px) saturate(140%)',
+        animation: 'ol-prompt-fade 0.2s var(--ol-motion-soft)',
       }}
     >
       <div
@@ -392,7 +395,7 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
           border: '0.5px solid rgba(0,0,0,.08)',
           boxShadow: '0 24px 70px -24px rgba(15,17,22,.38), 0 0 0 0.5px rgba(0,0,0,.06)',
           padding: 20,
-          animation: 'ol-prompt-pop 0.22s cubic-bezier(.2,.9,.3,1.1)',
+          animation: 'ol-prompt-pop 0.26s var(--ol-motion-spring)',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
@@ -430,7 +433,7 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
               fontSize: 12.5,
               fontWeight: 500,
               cursor: 'default',
-              transition: 'background 0.12s ease-out, border-color 0.12s ease-out',
+              transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
             }}
           >
             {t('shell.providerPrompt.later')}
@@ -448,7 +451,7 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
               fontSize: 12.5,
               fontWeight: 500,
               cursor: 'default',
-              transition: 'background 0.12s ease-out, transform 0.08s ease-out',
+              transition: 'background 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick)',
             }}
           >
             {t('shell.providerPrompt.openSettings')}
@@ -472,9 +475,9 @@ function HotkeyModeMigrationPrompt({ onLater, onOpenSettings }: { onLater: () =>
         justifyContent: 'center',
         padding: 28,
         background: 'rgba(15,17,22,0.28)',
-        backdropFilter: 'blur(2px)',
-        WebkitBackdropFilter: 'blur(2px)',
-        animation: 'ol-prompt-fade 0.18s ease-out',
+        backdropFilter: 'blur(6px) saturate(140%)',
+        WebkitBackdropFilter: 'blur(6px) saturate(140%)',
+        animation: 'ol-prompt-fade 0.2s var(--ol-motion-soft)',
       }}
     >
       <div
@@ -485,7 +488,7 @@ function HotkeyModeMigrationPrompt({ onLater, onOpenSettings }: { onLater: () =>
           border: '0.5px solid rgba(0,0,0,.08)',
           boxShadow: '0 24px 70px -24px rgba(15,17,22,.38), 0 0 0 0.5px rgba(0,0,0,.06)',
           padding: 20,
-          animation: 'ol-prompt-pop 0.22s cubic-bezier(.2,.9,.3,1.1)',
+          animation: 'ol-prompt-pop 0.26s var(--ol-motion-spring)',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
@@ -523,7 +526,7 @@ function HotkeyModeMigrationPrompt({ onLater, onOpenSettings }: { onLater: () =>
               fontSize: 12.5,
               fontWeight: 500,
               cursor: 'default',
-              transition: 'background 0.12s ease-out, border-color 0.12s ease-out',
+              transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
             }}
           >
             {t('shell.hotkeyModePrompt.later')}
@@ -541,7 +544,7 @@ function HotkeyModeMigrationPrompt({ onLater, onOpenSettings }: { onLater: () =>
               fontSize: 12.5,
               fontWeight: 500,
               cursor: 'default',
-              transition: 'background 0.12s ease-out, transform 0.08s ease-out',
+              transition: 'background 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick)',
             }}
           >
             {t('shell.hotkeyModePrompt.openSettings')}
@@ -579,7 +582,7 @@ function FooterIcon({ name, tip, active, onClick }: FooterIconProps) {
         color: active ? 'var(--ol-ink)' : hover ? 'var(--ol-ink-2)' : 'var(--ol-ink-4)',
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         cursor: 'default',
-        transition: 'background 0.12s ease-out, color 0.12s ease-out',
+        transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
       }}>
       <Icon name={name} size={15} />
     </button>
@@ -610,11 +613,11 @@ function FooterIconWithPopover({
             padding: 12,
             borderRadius: 12,
             background: 'rgba(255,255,255,0.96)',
-            backdropFilter: 'blur(20px) saturate(180%)',
-            WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+            backdropFilter: 'blur(var(--ol-glass-blur)) saturate(180%)',
+            WebkitBackdropFilter: 'blur(var(--ol-glass-blur)) saturate(180%)',
             border: '0.5px solid rgba(0,0,0,0.08)',
             boxShadow: '0 18px 50px -22px rgba(15,17,22,0.32), 0 0 0 0.5px rgba(0,0,0,0.05)',
-            animation: 'ol-popover-pop 0.18s cubic-bezier(0.32, 0.72, 0, 1) both',
+            animation: 'ol-popover-pop 0.22s var(--ol-motion-spring) both',
             transformOrigin: 'bottom left',
           }}
         >
@@ -693,7 +696,7 @@ function FooterAutoUpdateButton() {
           cursor: 'default',
           padding: 0,
           opacity: u.checking || u.busy ? 0.7 : 1,
-          transition: 'opacity 0.12s ease-out',
+          transition: 'opacity 0.16s var(--ol-motion-soft)',
         }}
       >
         {u.checking ? t('settings.about.checkingUpdate') : t('settings.about.checkUpdateBtn')}
