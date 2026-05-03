@@ -1474,6 +1474,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             InsertStatus::Failed
         }
     };
+    restore_prepared_windows_ime_session(inner, current_session_id);
     let inserted_chars = polished.chars().count() as u32;
 
     // 累计每条 enabled 词条在最终文本中的命中次数。
