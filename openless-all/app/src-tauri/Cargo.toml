@@ -50,7 +50,7 @@ core-foundation = "0.10"
 core-graphics = "0.24"
 objc2 = "0.5"
 objc2-foundation = "0.2"
-objc2-app-kit = { version = "0.2", features = ["NSButton", "NSWindow"] }
+objc2-app-kit = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 raw-window-handle = "0.6"

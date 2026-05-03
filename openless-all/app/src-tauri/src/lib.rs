@@ -101,7 +101,6 @@ pub fn run() {
                     ) {
                         log::warn!("[main] vibrancy failed: {e}");
                     }
-                    tune_macos_main_window_controls(&main);
                 }
                 #[cfg(target_os = "windows")]
                 {
@@ -231,16 +230,6 @@ pub fn run() {
                             apply_windows_rounded_frame(&main);
                         }
                     }
-                    #[cfg(target_os = "macos")]
-                    if matches!(
-                        event,
-                        tauri::WindowEvent::Resized(_)
-                            | tauri::WindowEvent::ScaleFactorChanged { .. }
-                    ) {
-                        if let Some(main) = app.get_webview_window("main") {
-                            tune_macos_main_window_controls(&main);
-                        }
-                    }
                 }
             }
             RunEvent::Exit => {
@@ -250,51 +239,6 @@ pub fn run() {
             }
             _ => {}
         });
-}
-
-/// macOS 主窗口保留原生 traffic lights，但 React 壳层把标题区压低到 30pt。
-/// 系统默认按钮会落在偏下的位置；这里只微调三个标准按钮的位置，让它们
-/// 在顶部视觉带里垂直居中，避免和左侧 OpenLess 品牌区抢空间。
-#[cfg(target_os = "macos")]
-fn tune_macos_main_window_controls<R: Runtime>(window: &tauri::WebviewWindow<R>) {
-    use objc2::msg_send;
-    use objc2::runtime::AnyObject;
-    use objc2_app_kit::NSWindowButton;
-    use objc2_foundation::{NSPoint, NSRect};
-
-    const TRAFFIC_LIGHT_LEFT: f64 = 14.0;
-    const TRAFFIC_LIGHT_GAP: f64 = 20.0;
-    const TRAFFIC_LIGHT_TOP_INSET: f64 = 9.0;
-
-    let Ok(handle) = window.ns_window() else {
-        return;
-    };
-    let ns_window = handle as *mut AnyObject;
-    if ns_window.is_null() {
-        return;
-    }
-
-    unsafe {
-        let window_frame: NSRect = msg_send![ns_window, frame];
-        for (index, button_kind) in [
-            NSWindowButton::NSWindowCloseButton,
-            NSWindowButton::NSWindowMiniaturizeButton,
-            NSWindowButton::NSWindowZoomButton,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let button: *mut AnyObject = msg_send![ns_window, standardWindowButton: button_kind];
-            if button.is_null() {
-                continue;
-            }
-            let frame: NSRect = msg_send![button, frame];
-            let x = TRAFFIC_LIGHT_LEFT + TRAFFIC_LIGHT_GAP * index as f64;
-            let y = window_frame.size.height - frame.size.height - TRAFFIC_LIGHT_TOP_INSET;
-            let origin = NSPoint::new(x, y);
-            let _: () = msg_send![button, setFrameOrigin: origin];
-        }
-    }
 }
 
 #[cfg(target_os = "windows")]

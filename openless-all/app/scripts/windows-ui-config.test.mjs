@@ -60,9 +60,15 @@ assertMatch(
 );
 assertMatch(
   libRs,
-  /fn tune_macos_main_window_controls[\s\S]*?standardWindowButton[\s\S]*?TRAFFIC_LIGHT_TOP_INSET/,
-  'macOS main window should explicitly center native traffic lights in the compact top band',
+  /show_main_window[\s\S]*?set_focus\(\)/,
+  'macOS main window should rely on native traffic lights instead of manually moving standardWindowButton frames',
 );
+if (/standardWindowButton|setFrameOrigin: origin|tune_macos_main_window_controls/.test(libRs)) {
+  throw new Error('macOS traffic lights should not be manually repositioned; keep native AppKit button frames visible');
+}
+if (!/action=\"close\"/.test(windowChromeTsx) || !/tone=\"danger\"/.test(windowChromeTsx)) {
+  throw new Error('windows titlebar should keep the close button and danger hover treatment');
+}
 assertMatch(
   tokensCss,
   /--ol-motion-spring:[\s\S]*?--ol-motion-soft:[\s\S]*?--ol-motion-quick:/,
