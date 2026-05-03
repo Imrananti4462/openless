@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
 import { Icon } from '../components/Icon';
 import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../components/AutoUpdate';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
@@ -231,12 +232,59 @@ function RecordingSection() {
       >
         <Toggle on={prefs.restoreClipboardAfterPaste} onToggle={onRestoreClipboardChange} />
       </SettingRow>
+      <AutostartRow />
       {capability.statusHint && (
         <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.5 }}>
           {capability.statusHint}
         </div>
       )}
     </Card>
+  );
+}
+
+// 不存进 prefs：autostart 状态由 OS 持有（mac LaunchAgent plist / linux .desktop /
+// windows HKCU\Run），prefs 缓存反而会与 OS 真相不一致。issue #194。
+function AutostartRow() {
+  const { t } = useTranslation();
+  const [enabled, setEnabled] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    isAutostartEnabled()
+      .then(v => {
+        if (!cancelled) {
+          setEnabled(v);
+          setLoaded(true);
+        }
+      })
+      .catch(err => {
+        console.error('[autostart] isEnabled failed', err);
+        if (!cancelled) setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onToggle = async (next: boolean) => {
+    setEnabled(next);
+    try {
+      if (next) await enableAutostart();
+      else await disableAutostart();
+    } catch (err) {
+      console.error('[autostart] toggle failed', err);
+      setEnabled(!next);
+    }
+  };
+
+  return (
+    <SettingRow
+      label={t('settings.recording.startupAtBoot')}
+      desc={t('settings.recording.startupAtBootDesc')}
+    >
+      {loaded ? <Toggle on={enabled} onToggle={onToggle} /> : null}
+    </SettingRow>
   );
 }
 
