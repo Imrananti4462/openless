@@ -90,6 +90,10 @@ pub struct UserPreferences {
     /// 关掉就把听写文本留在剪贴板，让 simulate_paste 实际没生效时用户能 Ctrl+V 找回。
     /// macOS 走 AX 直写，不受这个开关影响。详见 issue #111。
     pub restore_clipboard_after_paste: bool,
+    /// Windows: 是否允许 TSF 失败后继续使用 SendInput / 粘贴类非 TSF 兜底。
+    /// 默认开启以保持可用性；关闭后可验证文本是否真正由 TSF 上屏。
+    #[serde(default = "default_true")]
+    pub allow_non_tsf_insertion_fallback: bool,
     /// 用户的工作语言（多选，原生名）。会作为前提注入 LLM polish/translate 的 system prompt 头部，
     /// 让模型知道该用户在哪些语言间工作。详见 issue #4。
     #[serde(default = "default_working_languages")]
@@ -120,6 +124,7 @@ impl Default for UserPreferences {
             active_asr_provider: "volcengine".into(),
             active_llm_provider: "ark".into(),
             restore_clipboard_after_paste: true,
+            allow_non_tsf_insertion_fallback: true,
             working_languages: default_working_languages(),
             translation_target_language: String::new(),
         }
@@ -381,4 +386,23 @@ pub struct TodayMetrics {
     pub segments_today: u64,
     pub avg_latency_ms: u64,
     pub total_duration_ms: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_tsf_insertion_fallback_defaults_to_enabled() {
+        let prefs = UserPreferences::default();
+
+        assert!(prefs.allow_non_tsf_insertion_fallback);
+    }
+
+    #[test]
+    fn missing_non_tsf_insertion_fallback_pref_defaults_to_enabled() {
+        let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
+
+        assert!(prefs.allow_non_tsf_insertion_fallback);
+    }
 }

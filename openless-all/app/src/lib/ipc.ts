@@ -45,6 +45,7 @@ const mockSettings: UserPreferences = {
   activeAsrProvider: 'volcengine',
   activeLlmProvider: 'ark',
   restoreClipboardAfterPaste: true,
+  allowNonTsfInsertionFallback: true,
   workingLanguages: ['简体中文'],
   translationTargetLanguage: '',
 };

@@ -217,6 +217,8 @@ export const zhCN = {
       capsuleDesc: '录音 / 转写时在屏幕底部显示半透明胶囊。',
       restoreClipboardLabel: '插入后恢复剪贴板',
       restoreClipboardDesc: '仅 Windows / Linux：粘贴成功后恢复你原来的剪贴板内容（默认开）。关掉就把听写文本留在剪贴板，模拟粘贴没真正落地时可以手动 Ctrl+V 找回。详见 issue #111。',
+      allowNonTsfFallbackLabel: '允许非 TSF 兜底',
+      allowNonTsfFallbackDesc: '仅 Windows：TSF 直接上屏失败后，允许改用 Unicode SendInput、快捷键粘贴或 WM_PASTE。关闭后可验证是否真实使用 TSF 输入。',
     },
     providers: {
       llmTitle: 'LLM 模型（润色）',

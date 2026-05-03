@@ -994,7 +994,9 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     let focus_target = inner.state.lock().focus_target;
     restore_focus_target_if_possible(focus_target);
-    let restore_clipboard = inner.prefs.get().restore_clipboard_after_paste;
+    let prefs = inner.prefs.get();
+    let restore_clipboard = prefs.restore_clipboard_after_paste;
+    let allow_non_tsf_insertion_fallback = prefs.allow_non_tsf_insertion_fallback;
     #[cfg(target_os = "windows")]
     let ime_target = capture_ime_submit_target();
     #[cfg(target_os = "windows")]
@@ -1003,6 +1005,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         current_session_id,
         &polished,
         restore_clipboard,
+        allow_non_tsf_insertion_fallback,
         ime_target,
     )
     .await;
@@ -1029,7 +1032,14 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     // polish 失败时在 history 里标记 polishFailed，让用户能在历史详情看到为什么这次输出
     // 不是预期的 mode 风格。即使失败也不丢词 — final_text 仍是原文（保留"用户的话不丢"语义）。
-    let error_code = polish_error.as_ref().map(|_| "polishFailed".to_string());
+    let tsf_required_insert_failed = cfg!(target_os = "windows")
+        && !allow_non_tsf_insertion_fallback
+        && status == InsertStatus::Failed;
+    let error_code = if tsf_required_insert_failed {
+        Some("windowsImeTsfRequired".to_string())
+    } else {
+        polish_error.as_ref().map(|_| "polishFailed".to_string())
+    };
 
     let session = DictationSession {
         id: Uuid::new_v4().to_string(),
@@ -1050,7 +1060,9 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         log::error!("[coord] history append failed: {e}");
     }
 
-    let done_message = if polish_error.is_some() {
+    let done_message = if tsf_required_insert_failed {
+        Some("TSF 未上屏，已禁止非 TSF 兜底".to_string())
+    } else if polish_error.is_some() {
         // polish 失败优先告知用户，即使 insert 成功也要让用户知道这版是原文
         Some("润色失败，已插入原文".to_string())
     } else {
@@ -1162,6 +1174,7 @@ async fn insert_with_windows_ime_first(
     session_id: u64,
     polished: &str,
     restore_clipboard: bool,
+    allow_non_tsf_insertion_fallback: bool,
     ime_target: Option<ImeSubmitTarget>,
 ) -> InsertStatus {
     let prepared = {
@@ -1169,9 +1182,15 @@ async fn insert_with_windows_ime_first(
         take_matching_prepared_windows_ime_session(&mut slot, session_id)
     };
     let Some(prepared) = prepared else {
-        return inner
-            .inserter
-            .insert_via_clipboard_fallback(polished, restore_clipboard);
+        log::warn!("[windows-ime] no prepared TSF session for this dictation");
+        if should_try_non_tsf_insertion_fallback(
+            allow_non_tsf_insertion_fallback,
+            InsertStatus::Failed,
+        ) {
+            return insert_via_non_tsf_fallback(inner, polished, restore_clipboard);
+        }
+        log::warn!("[windows-ime] non-TSF insertion fallback is disabled; failing insert");
+        return InsertStatus::Failed;
     };
 
     let request = crate::windows_ime_ipc::ImeSubmitRequest {
@@ -1184,17 +1203,37 @@ async fn insert_with_windows_ime_first(
     let ime_status = match inner.windows_ime.submit_prepared(&prepared, request).await {
         Ok(status) => status,
         Err(error) => {
-            log::warn!(
-                "[windows-ime] TSF submit failed, falling back to non-TSF insertion: {error}"
-            );
-            InsertStatus::CopiedFallback
+            log::warn!("[windows-ime] TSF submit failed: {error}");
+            InsertStatus::Failed
         }
     };
     inner.windows_ime.restore_session(prepared);
 
     if ime_status == InsertStatus::Inserted {
         ime_status
-    } else if inner.inserter.insert_via_unicode_keystrokes(polished) == InsertStatus::Inserted {
+    } else if should_try_non_tsf_insertion_fallback(allow_non_tsf_insertion_fallback, ime_status) {
+        insert_via_non_tsf_fallback(inner, polished, restore_clipboard)
+    } else {
+        log::warn!("[windows-ime] TSF did not insert; non-TSF insertion fallback is disabled");
+        InsertStatus::Failed
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn should_try_non_tsf_insertion_fallback(
+    allow_non_tsf_insertion_fallback: bool,
+    ime_status: InsertStatus,
+) -> bool {
+    allow_non_tsf_insertion_fallback && ime_status != InsertStatus::Inserted
+}
+
+#[cfg(target_os = "windows")]
+fn insert_via_non_tsf_fallback(
+    inner: &Arc<Inner>,
+    polished: &str,
+    restore_clipboard: bool,
+) -> InsertStatus {
+    if inner.inserter.insert_via_unicode_keystrokes(polished) == InsertStatus::Inserted {
         log::info!("[windows-ime] TSF unavailable; inserted via Unicode SendInput");
         InsertStatus::Inserted
     } else {
@@ -1563,6 +1602,31 @@ mod tests {
 
         assert!(take_matching_prepared_windows_ime_session(&mut slot, 2).is_some());
         assert!(slot.is_none());
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn non_tsf_insertion_fallback_gate_blocks_only_when_disabled() {
+        assert!(should_try_non_tsf_insertion_fallback(
+            true,
+            InsertStatus::CopiedFallback
+        ));
+        assert!(should_try_non_tsf_insertion_fallback(
+            true,
+            InsertStatus::Failed
+        ));
+        assert!(!should_try_non_tsf_insertion_fallback(
+            true,
+            InsertStatus::Inserted
+        ));
+        assert!(!should_try_non_tsf_insertion_fallback(
+            false,
+            InsertStatus::CopiedFallback
+        ));
+        assert!(!should_try_non_tsf_insertion_fallback(
+            false,
+            InsertStatus::Failed
+        ));
     }
 
     #[test]

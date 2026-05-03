@@ -154,6 +154,8 @@ function RecordingSection() {
     savePrefs({ ...prefs, showCapsule });
   const onRestoreClipboardChange = (restoreClipboardAfterPaste: boolean) =>
     savePrefs({ ...prefs, restoreClipboardAfterPaste });
+  const onAllowNonTsfFallbackChange = (allowNonTsfInsertionFallback: boolean) =>
+    savePrefs({ ...prefs, allowNonTsfInsertionFallback });
 
   const choices: Array<[HotkeyMode, string]> = [
     ['toggle', t('settings.recording.modeToggle')],
@@ -231,6 +233,17 @@ function RecordingSection() {
       >
         <Toggle on={prefs.restoreClipboardAfterPaste} onToggle={onRestoreClipboardChange} />
       </SettingRow>
+      {capability.adapter === 'windowsLowLevel' && (
+        <SettingRow
+          label={t('settings.recording.allowNonTsfFallbackLabel')}
+          desc={t('settings.recording.allowNonTsfFallbackDesc')}
+        >
+          <Toggle
+            on={prefs.allowNonTsfInsertionFallback}
+            onToggle={onAllowNonTsfFallbackChange}
+          />
+        </SettingRow>
+      )}
       {capability.statusHint && (
         <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.5 }}>
           {capability.statusHint}

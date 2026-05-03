@@ -219,6 +219,8 @@ export const en: typeof zhCN = {
       capsuleDesc: 'Show a translucent capsule at the bottom of the screen while recording / transcribing.',
       restoreClipboardLabel: 'Restore clipboard after insert',
       restoreClipboardDesc: 'Windows / Linux only: restore your original clipboard after a successful paste (default on). Turn off to keep the dictation text in the clipboard so you can manually Ctrl+V if the simulated paste did not actually land. See issue #111.',
+      allowNonTsfFallbackLabel: 'Allow non-TSF fallback',
+      allowNonTsfFallbackDesc: 'Windows only: if direct TSF insertion fails, allow Unicode SendInput, shortcut paste, or WM_PASTE. Turn off to verify that insertion is really coming from TSF.',
     },
     providers: {
       llmTitle: 'LLM (polishing)',
