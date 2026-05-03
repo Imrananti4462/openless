@@ -22,10 +22,14 @@ mod qa_hotkey;
 mod recorder;
 mod selection;
 mod types;
+mod windows_ime_ipc;
+mod windows_ime_profile;
+mod windows_ime_protocol;
+mod windows_ime_session;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::mpsc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use std::time::Duration;
@@ -181,6 +185,7 @@ pub fn run() {
             commands::set_settings,
             commands::get_hotkey_status,
             commands::get_hotkey_capability,
+            commands::get_windows_ime_status,
             commands::get_credentials,
             commands::set_credential,
             commands::list_history,
@@ -228,7 +233,11 @@ pub fn run() {
                         hide_main_window(app);
                     }
                     #[cfg(target_os = "windows")]
-                    if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }) {
+                    if matches!(
+                        event,
+                        tauri::WindowEvent::Resized(_)
+                            | tauri::WindowEvent::ScaleFactorChanged { .. }
+                    ) {
                         if let Some(main) = app.get_webview_window("main") {
                             apply_windows_rounded_frame(&main);
                         }
@@ -583,9 +592,7 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
 /// fallback 仍能从原 app 拿到选区）。
 pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind: &str) {
     let Some(window) = app.get_webview_window("qa") else {
-        log::info!(
-            "[qa] show 跳过：qa 窗口不存在 (content_kind={content_kind})"
-        );
+        log::info!("[qa] show 跳过：qa 窗口不存在 (content_kind={content_kind})");
         return;
     };
     // 仅首次 show 时居中；之后保留用户拖动后的位置。
@@ -796,20 +803,32 @@ mod tests {
     fn capsule_window_bounds_leave_room_for_windows_shadow() {
         let bounds = capsule_window_bounds(false);
         #[cfg(target_os = "windows")]
-        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 84.0, 12.0));
+        assert_eq!(
+            (bounds.width, bounds.height, bounds.bottom_inset),
+            (220.0, 84.0, 12.0)
+        );
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 110.0, 0.0));
+        assert_eq!(
+            (bounds.width, bounds.height, bounds.bottom_inset),
+            (220.0, 110.0, 0.0)
+        );
     }
 
     #[test]
     fn capsule_window_bounds_expand_for_translation_badge() {
         let bounds = capsule_window_bounds(true);
         #[cfg(target_os = "windows")]
-        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 118.0, 12.0));
+        assert_eq!(
+            (bounds.width, bounds.height, bounds.bottom_inset),
+            (220.0, 118.0, 12.0)
+        );
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 110.0, 0.0));
+        assert_eq!(
+            (bounds.width, bounds.height, bounds.bottom_inset),
+            (220.0, 110.0, 0.0)
+        );
     }
 
     #[test]
