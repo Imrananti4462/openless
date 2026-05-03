@@ -34,7 +34,8 @@ function Test-IsAdministrator {
 }
 
 $appRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$stagingRoot = Join-Path $appRoot "src-tauri\target\windows-ime-register"
+$stagingStamp = "{0:yyyyMMddHHmmss}-{1}" -f (Get-Date), $PID
+$stagingRoot = Join-Path $appRoot "src-tauri\target\windows-ime-register\$stagingStamp"
 
 function Get-DllPath {
   param(

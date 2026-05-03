@@ -67,6 +67,8 @@ assert.match(imeBuild, /\/p:IntDir=/, "IME build should pass IntDir to MSBuild")
 assert.match(imeRegister, /windows-ime-build\.ps1/, "IME register should build before registering");
 assert.doesNotMatch(imeRegister, /if \(-not \(Test-Path \$dll\)\)/, "IME register must rebuild stale DLLs, not only missing DLLs");
 assert.match(imeRegister, /windows-ime-register/, "IME register should use a side-by-side staging output to avoid locked registered DLLs");
+assert.match(imeRegister, /Get-Date/, "IME register should create a fresh staging output for each registration run");
+assert.match(imeRegister, /\$PID/, "IME register should include the process id in the staging output to avoid path reuse");
 assert.match(imeRegister, /-OutputDirectory/, "IME register should pass a staging output directory to the build script");
 assert.match(imeRegister, /-IntermediateDirectory/, "IME register should pass a staging intermediate directory to the build script");
 
@@ -82,6 +84,9 @@ assert.match(imeTextService, /TF_E_SYNCHRONOUS/, "IME should detect hosts like W
 assert.match(imeTextService, /TF_ES_ASYNC \| TF_ES_READWRITE/, "IME should retry Word-hosted commits with an async edit session");
 assert.match(imeTextService, /WaitForSingleObject/, "IME pipe submit should wait for async edit-session completion");
 assert.match(imeEditSession, /SetEvent/, "IME edit session should signal async completion back to the pipe submitter");
+assert.match(imeEditSession, /Collapse\(edit_cookie, TF_ANCHOR_END\)/, "IME should collapse the committed range to its end after insertion");
+assert.match(imeEditSession, /SetSelection\(edit_cookie, 1, &selection\)/, "IME should move the caret to the end of inserted text");
+assert.match(imeEditSession, /TF_AE_END/, "IME should make the end of the committed text the active selection end");
 
 assert.match(wixFragment, /DirectoryRef Id="INSTALLDIR"/, "WiX fragment should install into the app directory");
 assert.match(wixFragment, /Component Id="OpenLessImeDllX64Component"/, "WiX fragment should define the x64 TSF DLL component");

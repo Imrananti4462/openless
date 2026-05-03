@@ -105,6 +105,17 @@ HRESULT OpenLessEditSession::InsertText(TfEditCookie edit_cookie) {
         edit_cookie, 0, text_.c_str(), static_cast<LONG>(text_.size()),
         &committed_range);
     if (committed_range != nullptr) {
+      if (SUCCEEDED(hr)) {
+        const HRESULT collapse_hr =
+            committed_range->Collapse(edit_cookie, TF_ANCHOR_END);
+        if (SUCCEEDED(collapse_hr)) {
+          TF_SELECTION selection = {};
+          selection.range = committed_range;
+          selection.style.ase = TF_AE_END;
+          selection.style.fInterimChar = FALSE;
+          (void)context_->SetSelection(edit_cookie, 1, &selection);
+        }
+      }
       committed_range->Release();
     }
   }
