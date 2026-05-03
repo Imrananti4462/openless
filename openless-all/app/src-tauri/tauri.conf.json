@@ -90,7 +90,8 @@
           "wix/openless-ime.wxs"
         ],
         "componentRefs": [
-          "OpenLessImeDllComponent"
+          "OpenLessImeDllX64Component",
+          "OpenLessImeDllX86Component"
         ]
       }
     }

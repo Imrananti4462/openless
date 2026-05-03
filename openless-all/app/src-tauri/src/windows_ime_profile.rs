@@ -196,7 +196,7 @@ mod windows_impl {
         TF_IPPMF_ENABLEPROFILE, TF_IPPMF_FORSESSION, TF_PROFILETYPE_INPUTPROCESSOR,
         TF_PROFILETYPE_KEYBOARDLAYOUT,
     };
-    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY};
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY};
     use winreg::RegKey;
 
     const OPENLESS_COM_INPROC_KEY: &str =
@@ -414,6 +414,22 @@ mod windows_impl {
             };
         }
 
+        let x86_dll_path = match read_com_dll_path(&hklm, KEY_READ | KEY_WOW64_32KEY, "32-bit") {
+            Ok(path) => path,
+            Err(reason) => {
+                return RegistrationInspection::Broken {
+                    dll_path: Some(dll_path),
+                    reason,
+                };
+            }
+        };
+        if !Path::new(&x86_dll_path).is_file() {
+            return RegistrationInspection::Broken {
+                dll_path: Some(x86_dll_path),
+                reason: "OpenLess 32-bit COM DLL path does not exist".to_string(),
+            };
+        }
+
         if !tip_key_exists {
             return RegistrationInspection::Broken {
                 dll_path: Some(dll_path),
@@ -437,6 +453,16 @@ mod windows_impl {
         }
 
         RegistrationInspection::Installed { dll_path }
+    }
+
+    fn read_com_dll_path(hklm: &RegKey, flags: u32, label: &str) -> Result<String, String> {
+        let com_key = hklm
+            .open_subkey_with_flags(OPENLESS_COM_INPROC_KEY, flags)
+            .map_err(|_| format!("OpenLess {label} COM registration is missing"))?;
+        match com_key.get_value::<String, _>("") {
+            Ok(value) if !value.trim().is_empty() => Ok(value),
+            _ => Err(format!("OpenLess {label} COM DLL path is missing")),
+        }
     }
 
     fn with_profile_manager<T>(

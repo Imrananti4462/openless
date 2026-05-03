@@ -8,12 +8,16 @@ const appRoot = join(scriptsDir, "..");
 const scriptPath = join(scriptsDir, "windows-package-msvc.ps1");
 const launcherPath = join(scriptsDir, "windows-package-msvc.cmd");
 const imeBuildPath = join(scriptsDir, "windows-ime-build.ps1");
+const imeSolutionPath = join(appRoot, "windows-ime", "OpenLessIme.sln");
+const imeProjectPath = join(appRoot, "windows-ime", "OpenLessIme.vcxproj");
 const tauriConfigPath = join(appRoot, "src-tauri", "tauri.conf.json");
 const wixFragmentPath = join(appRoot, "src-tauri", "wix", "openless-ime.wxs");
 
 const script = readFileSync(scriptPath, "utf8");
 const launcher = readFileSync(launcherPath, "utf8");
 const imeBuild = readFileSync(imeBuildPath, "utf8");
+const imeSolution = readFileSync(imeSolutionPath, "utf8");
+const imeProject = readFileSync(imeProjectPath, "utf8");
 const tauriConfig = JSON.parse(readFileSync(tauriConfigPath, "utf8"));
 const wixFragment = readFileSync(wixFragmentPath, "utf8");
 
@@ -25,7 +29,8 @@ const requiredFragments = [
   "VsDevCmd.bat",
   "npm.cmd ci",
   "windows-ime-build.ps1",
-  "OPENLESS_IME_DLL",
+  "OPENLESS_IME_DLL_X64",
+  "OPENLESS_IME_DLL_X86",
   "OpenLessIme.dll",
   "tauri build -- --target x86_64-pc-windows-msvc --bundles msi",
   "Repair-TauriMsiBundle",
@@ -48,18 +53,33 @@ assert.match(script, /\[switch\]\$CleanArtifacts/, "script should support cleani
 
 assert.match(imeBuild, /\[string\]\$OutputDirectory/, "IME build should support a package-specific output directory");
 assert.match(imeBuild, /\[string\]\$IntermediateDirectory/, "IME build should support a package-specific intermediate directory");
+assert.match(imeBuild, /\[ValidateSet\("x64", "Win32"\)\]/, "IME build should support x64 and Win32 platforms");
+assert.match(imeBuild, /\/p:Platform=\$Platform/, "IME build should pass Platform to MSBuild");
+assert.match(imeBuild, /\$defaultOutputDirectory = Join-Path \$appRoot "windows-ime\\\$defaultPlatformFolder\\\$Configuration"/, "IME build should force stable default OutDir per platform");
 assert.match(imeBuild, /\/p:OutDir=/, "IME build should pass OutDir to MSBuild");
 assert.match(imeBuild, /\/p:IntDir=/, "IME build should pass IntDir to MSBuild");
 
 assert.deepEqual(tauriConfig.bundle.windows.wix.fragmentPaths, ["wix/openless-ime.wxs"]);
-assert.deepEqual(tauriConfig.bundle.windows.wix.componentRefs, ["OpenLessImeDllComponent"]);
+assert.deepEqual(tauriConfig.bundle.windows.wix.componentRefs, [
+  "OpenLessImeDllX64Component",
+  "OpenLessImeDllX86Component",
+]);
+
+assert.match(imeSolution, /Release\|Win32/, "IME solution should include a Win32 Release configuration");
+assert.match(imeProject, /Release\|Win32/, "IME project should include a Win32 Release configuration");
 
 assert.match(wixFragment, /DirectoryRef Id="INSTALLDIR"/, "WiX fragment should install into the app directory");
-assert.match(wixFragment, /Component Id="OpenLessImeDllComponent"/, "WiX fragment should define the TSF DLL component");
-assert.match(wixFragment, /Source="src-tauri\\target\\windows-ime-msvc\\x64\\Release\\OpenLessIme\.dll"/, "WiX fragment should consume the package-built IME DLL");
+assert.match(wixFragment, /Component Id="OpenLessImeDllX64Component"/, "WiX fragment should define the x64 TSF DLL component");
+assert.match(wixFragment, /Component Id="OpenLessImeDllX86Component"/, "WiX fragment should define the x86 TSF DLL component");
+assert.match(wixFragment, /Source="src-tauri\\target\\windows-ime-msvc\\x64\\Release\\OpenLessIme\.dll"/, "WiX fragment should consume the package-built x64 IME DLL");
+assert.match(wixFragment, /Source="src-tauri\\target\\windows-ime-msvc\\x86\\Release\\OpenLessIme\.dll"/, "WiX fragment should consume the package-built x86 IME DLL");
 assert.match(wixFragment, /regsvr32\.exe/, "MSI should register and unregister the TSF DLL");
-assert.match(wixFragment, /RegisterOpenLessIme/, "MSI should register OpenLess IME during install");
-assert.match(wixFragment, /UnregisterOpenLessIme/, "MSI should unregister OpenLess IME during uninstall");
+assert.match(wixFragment, /\[System64Folder\]regsvr32\.exe/, "MSI should register the x64 IME with 64-bit regsvr32");
+assert.match(wixFragment, /\[WindowsFolder\]SysWOW64\\regsvr32\.exe/, "MSI should register the x86 IME with 32-bit regsvr32");
+assert.match(wixFragment, /RegisterOpenLessImeX64/, "MSI should register x64 OpenLess IME during install");
+assert.match(wixFragment, /RegisterOpenLessImeX86/, "MSI should register x86 OpenLess IME during install");
+assert.match(wixFragment, /UnregisterOpenLessImeX64/, "MSI should unregister x64 OpenLess IME during uninstall");
+assert.match(wixFragment, /UnregisterOpenLessImeX86/, "MSI should unregister x86 OpenLess IME during uninstall");
 
 assert.match(launcher, /powershell\.exe/, "launcher should call powershell.exe");
 assert.match(launcher, /-ExecutionPolicy Bypass/, "launcher should bypass execution policy for this process");

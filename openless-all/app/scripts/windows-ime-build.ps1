@@ -1,6 +1,8 @@
 param(
   [ValidateSet("Debug", "Release")]
   [string]$Configuration = "Release",
+  [ValidateSet("x64", "Win32")]
+  [string]$Platform = "x64",
   [string]$OutputDirectory = "",
   [string]$IntermediateDirectory = ""
 )
@@ -37,9 +39,12 @@ function Find-MSBuild {
 
 $appRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $solution = Join-Path $appRoot "windows-ime\OpenLessIme.sln"
-$dll = Join-Path $appRoot "windows-ime\x64\$Configuration\OpenLessIme.dll"
+$defaultPlatformFolder = if ($Platform -eq "Win32") { "Win32" } else { $Platform }
+$defaultOutputDirectory = Join-Path $appRoot "windows-ime\$defaultPlatformFolder\$Configuration"
+$defaultIntermediateDirectory = Join-Path $appRoot "windows-ime\obj\$defaultPlatformFolder\$Configuration"
+$dll = Join-Path $defaultOutputDirectory "OpenLessIme.dll"
 $msbuild = Find-MSBuild
-$msbuildArgs = @($solution, "/p:Configuration=$Configuration", "/p:Platform=x64")
+$msbuildArgs = @($solution, "/p:Configuration=$Configuration", "/p:Platform=$Platform")
 
 function Get-FullPathWithTrailingSlash($Path) {
   $fullPath = [System.IO.Path]::GetFullPath($Path)
@@ -53,19 +58,17 @@ if (-not (Test-Path $solution)) {
   throw "Solution not found: $solution"
 }
 
-Write-Host "[build] $Configuration x64"
-if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) {
-  $outputDirectoryPath = Get-FullPathWithTrailingSlash $OutputDirectory
-  New-Item -ItemType Directory -Force -Path $outputDirectoryPath | Out-Null
-  $msbuildArgs += "/p:OutDir=$outputDirectoryPath"
-  $dll = Join-Path $outputDirectoryPath "OpenLessIme.dll"
-}
+Write-Host "[build] $Configuration $Platform"
+$outputDirectory = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $defaultOutputDirectory } else { $OutputDirectory }
+$outputDirectoryPath = Get-FullPathWithTrailingSlash $outputDirectory
+New-Item -ItemType Directory -Force -Path $outputDirectoryPath | Out-Null
+$msbuildArgs += "/p:OutDir=$outputDirectoryPath"
+$dll = Join-Path $outputDirectoryPath "OpenLessIme.dll"
 
-if (-not [string]::IsNullOrWhiteSpace($IntermediateDirectory)) {
-  $intermediateDirectoryPath = Get-FullPathWithTrailingSlash $IntermediateDirectory
-  New-Item -ItemType Directory -Force -Path $intermediateDirectoryPath | Out-Null
-  $msbuildArgs += "/p:IntDir=$intermediateDirectoryPath"
-}
+$intermediateDirectory = if ([string]::IsNullOrWhiteSpace($IntermediateDirectory)) { $defaultIntermediateDirectory } else { $IntermediateDirectory }
+$intermediateDirectoryPath = Get-FullPathWithTrailingSlash $intermediateDirectory
+New-Item -ItemType Directory -Force -Path $intermediateDirectoryPath | Out-Null
+$msbuildArgs += "/p:IntDir=$intermediateDirectoryPath"
 
 & $msbuild @msbuildArgs
 if ($LASTEXITCODE -ne 0) {

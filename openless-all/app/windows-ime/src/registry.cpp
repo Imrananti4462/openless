@@ -11,7 +11,7 @@ constexpr wchar_t kClsidKey[] =
     L"Software\\Classes\\CLSID\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}";
 constexpr wchar_t kInprocServer32Key[] =
     L"Software\\Classes\\CLSID\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\\InprocServer32";
-constexpr REGSAM kRegistryWriteAccess = KEY_WRITE | KEY_WOW64_64KEY;
+constexpr REGSAM kRegistryWriteAccess = KEY_WRITE;
 
 HRESULT HResultFromWin32Error(LSTATUS status) {
   return status == ERROR_SUCCESS ? S_OK : HRESULT_FROM_WIN32(status);

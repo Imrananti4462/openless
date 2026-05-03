@@ -139,14 +139,17 @@ function Invoke-MsvcBuild {
     [string]$CargoBin
   )
 
-  if ([string]::IsNullOrWhiteSpace($env:OPENLESS_IME_DLL) -or -not (Test-Path $env:OPENLESS_IME_DLL)) {
-    throw "OPENLESS_IME_DLL must point to the built OpenLessIme.dll before the MSI build."
+  if ([string]::IsNullOrWhiteSpace($env:OPENLESS_IME_DLL_X64) -or -not (Test-Path $env:OPENLESS_IME_DLL_X64)) {
+    throw "OPENLESS_IME_DLL_X64 must point to the built x64 OpenLessIme.dll before the MSI build."
+  }
+  if ([string]::IsNullOrWhiteSpace($env:OPENLESS_IME_DLL_X86) -or -not (Test-Path $env:OPENLESS_IME_DLL_X86)) {
+    throw "OPENLESS_IME_DLL_X86 must point to the built x86 OpenLessIme.dll before the MSI build."
   }
 
   $msiPath = Get-MsiPath
   Remove-Item -LiteralPath $msiPath -Force -ErrorAction SilentlyContinue
 
-  $buildCommand = "call `"$VsDevCmd`" -arch=x64 -host_arch=x64 && set `"PATH=$CargoBin;%PATH%`" && set `"OPENLESS_IME_DLL=$env:OPENLESS_IME_DLL`" && npm.cmd run tauri build -- --target x86_64-pc-windows-msvc --bundles msi"
+  $buildCommand = "call `"$VsDevCmd`" -arch=x64 -host_arch=x64 && set `"PATH=$CargoBin;%PATH%`" && set `"OPENLESS_IME_DLL_X64=$env:OPENLESS_IME_DLL_X64`" && set `"OPENLESS_IME_DLL_X86=$env:OPENLESS_IME_DLL_X86`" && npm.cmd run tauri build -- --target x86_64-pc-windows-msvc --bundles msi"
   & cmd.exe /d /c $buildCommand
   if ($LASTEXITCODE -ne 0) {
     Write-Warning "Tauri Windows MSI build returned exit code $LASTEXITCODE. Trying to finish MSI linking from generated WiX objects."
@@ -161,7 +164,7 @@ function Repair-TauriMsiBundle {
   $locale = Join-Path $wixRoot "locale.wxl"
   $msiPath = Get-MsiPath
 
-  foreach ($requiredPath in @($mainObject, $imeObject, $locale, $env:OPENLESS_IME_DLL)) {
+  foreach ($requiredPath in @($mainObject, $imeObject, $locale, $env:OPENLESS_IME_DLL_X64, $env:OPENLESS_IME_DLL_X86)) {
     if ([string]::IsNullOrWhiteSpace($requiredPath) -or -not (Test-Path $requiredPath)) {
       throw "Cannot repair Tauri MSI bundle because a required file is missing: $requiredPath"
     }
@@ -185,25 +188,31 @@ function Repair-TauriMsiBundle {
 
 function Invoke-OpenLessImeBuild {
   $buildScript = Join-Path $PSScriptRoot "windows-ime-build.ps1"
-  $imeOutDir = Join-Path $imeBuildRoot "x64\Release"
-  $imeIntDir = Join-Path $imeBuildRoot "obj\x64\Release"
 
   if (-not (Test-Path $buildScript)) {
     throw "OpenLess IME build script not found: $buildScript"
   }
 
-  & $buildScript -Configuration Release -OutputDirectory $imeOutDir -IntermediateDirectory $imeIntDir
-  if ($LASTEXITCODE -ne 0) {
-    throw "OpenLessIme build failed with exit code $LASTEXITCODE."
-  }
+  $targets = @(
+    @{ Platform = "x64"; Folder = "x64"; EnvName = "OPENLESS_IME_DLL_X64" },
+    @{ Platform = "Win32"; Folder = "x86"; EnvName = "OPENLESS_IME_DLL_X86" }
+  )
+  foreach ($target in $targets) {
+    $imeOutDir = Join-Path $imeBuildRoot "$($target.Folder)\Release"
+    $imeIntDir = Join-Path $imeBuildRoot "obj\$($target.Folder)\Release"
+    & $buildScript -Configuration Release -Platform $target.Platform -OutputDirectory $imeOutDir -IntermediateDirectory $imeIntDir
+    if ($LASTEXITCODE -ne 0) {
+      throw "OpenLessIme $($target.Platform) build failed with exit code $LASTEXITCODE."
+    }
 
-  $imeDll = Join-Path $imeOutDir "OpenLessIme.dll"
-  if (-not (Test-Path $imeDll)) {
-    throw "OpenLessIme.dll was not produced: $imeDll"
-  }
+    $imeDll = Join-Path $imeOutDir "OpenLessIme.dll"
+    if (-not (Test-Path $imeDll)) {
+      throw "OpenLessIme.dll was not produced: $imeDll"
+    }
 
-  $env:OPENLESS_IME_DLL = (Resolve-Path $imeDll).Path
-  Write-Host "[ok] OPENLESS_IME_DLL -> $env:OPENLESS_IME_DLL"
+    Set-Item -Path "Env:$($target.EnvName)" -Value (Resolve-Path $imeDll).Path
+    Write-Host "[ok] $($target.EnvName) -> $((Get-Item -Path "Env:$($target.EnvName)").Value)"
+  }
 }
 
 function Reset-ArtifactsRoot {
@@ -241,8 +250,11 @@ function Copy-WindowsArtifacts {
   if ($null -eq $webView2Loader) {
     throw "WebView2Loader.dll x64 not found under $releaseRoot\build"
   }
-  if ([string]::IsNullOrWhiteSpace($env:OPENLESS_IME_DLL) -or -not (Test-Path $env:OPENLESS_IME_DLL)) {
-    throw "OpenLessIme.dll not found for portable package: $env:OPENLESS_IME_DLL"
+  if ([string]::IsNullOrWhiteSpace($env:OPENLESS_IME_DLL_X64) -or -not (Test-Path $env:OPENLESS_IME_DLL_X64)) {
+    throw "x64 OpenLessIme.dll not found for portable package: $env:OPENLESS_IME_DLL_X64"
+  }
+  if ([string]::IsNullOrWhiteSpace($env:OPENLESS_IME_DLL_X86) -or -not (Test-Path $env:OPENLESS_IME_DLL_X86)) {
+    throw "x86 OpenLessIme.dll not found for portable package: $env:OPENLESS_IME_DLL_X86"
   }
 
   Reset-ArtifactsRoot
@@ -251,11 +263,15 @@ function Copy-WindowsArtifacts {
   $portableName = "OpenLess_${version}_x64_portable"
   $portableRoot = Join-Path $ArtifactsRoot $portableName
   $portableImeRoot = Join-Path $portableRoot "windows-ime"
+  $portableImeX64Root = Join-Path $portableImeRoot "x64"
+  $portableImeX86Root = Join-Path $portableImeRoot "x86"
   New-Item -ItemType Directory -Force -Path $portableRoot | Out-Null
-  New-Item -ItemType Directory -Force -Path $portableImeRoot | Out-Null
+  New-Item -ItemType Directory -Force -Path $portableImeX64Root | Out-Null
+  New-Item -ItemType Directory -Force -Path $portableImeX86Root | Out-Null
   Copy-Item -LiteralPath $exePath -Destination (Join-Path $portableRoot "openless.exe") -Force
   Copy-Item -LiteralPath $webView2Loader.FullName -Destination (Join-Path $portableRoot "WebView2Loader.dll") -Force
-  Copy-Item -LiteralPath $env:OPENLESS_IME_DLL -Destination (Join-Path $portableImeRoot "OpenLessIme.dll") -Force
+  Copy-Item -LiteralPath $env:OPENLESS_IME_DLL_X64 -Destination (Join-Path $portableImeX64Root "OpenLessIme.dll") -Force
+  Copy-Item -LiteralPath $env:OPENLESS_IME_DLL_X86 -Destination (Join-Path $portableImeX86Root "OpenLessIme.dll") -Force
 
   $zipPath = Join-Path $ArtifactsRoot "$portableName.zip"
   Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
