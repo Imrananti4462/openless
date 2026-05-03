@@ -283,6 +283,8 @@ export const en: typeof zhCN = {
         custom: 'Custom',
         asrVolcengine: 'Volcengine bigasr',
         asrSiliconflow: 'SiliconFlow SenseVoice',
+        asrZhipu: 'Zhipu GLM-ASR',
+        asrGroq: 'Groq Whisper-large-v3',
         asrWhisper: 'OpenAI Whisper (compatible)',
       },
       volcengineAppKeyLabel: 'APP ID',

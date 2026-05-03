@@ -281,6 +281,8 @@ export const zhCN = {
         custom: '自定义',
         asrVolcengine: '火山引擎 bigasr',
         asrSiliconflow: '硅基流动 SenseVoice',
+        asrZhipu: '智谱 GLM-ASR',
+        asrGroq: 'Groq Whisper-large-v3',
         asrWhisper: 'OpenAI Whisper（兼容）',
       },
       volcengineAppKeyLabel: 'APP ID',
