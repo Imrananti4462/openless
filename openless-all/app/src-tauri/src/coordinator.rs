@@ -1588,7 +1588,7 @@ async fn polish_text(
     working_languages: &[String],
     front_app: Option<&str>,
 ) -> anyhow::Result<String> {
-    let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
+    let api_key = require_ark_api_key()?;
     let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "deepseek-v3-2".to_string());
@@ -1630,7 +1630,7 @@ async fn translate_text(
     working_languages: &[String],
     front_app: Option<&str>,
 ) -> anyhow::Result<String> {
-    let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
+    let api_key = require_ark_api_key()?;
     let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "deepseek-v3-2".to_string());
@@ -2147,7 +2147,7 @@ where
     F: Fn(&str) + Send + Sync,
     C: Fn() -> bool + Send + Sync,
 {
-    let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
+    let api_key = require_ark_api_key()?;
     let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "deepseek-v3-2".to_string());
@@ -2169,6 +2169,19 @@ where
             should_cancel,
         )
         .await?)
+}
+
+fn require_ark_api_key() -> anyhow::Result<String> {
+    let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
+    validate_ark_api_key(&api_key)?;
+    Ok(api_key)
+}
+
+fn validate_ark_api_key(api_key: &str) -> anyhow::Result<()> {
+    if api_key.trim().is_empty() {
+        anyhow::bail!("API Key 为空");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2221,6 +2234,14 @@ mod tests {
             "AltLeft"
         ));
         assert!(!window_key_matches_trigger(HotkeyTrigger::Fn, "Fn", "Fn"));
+    }
+
+    #[test]
+    fn require_ark_api_key_rejects_blank_key() {
+        assert_eq!(
+            validate_ark_api_key("").unwrap_err().to_string(),
+            "API Key 为空"
+        );
     }
 
     #[test]
