@@ -1566,6 +1566,18 @@ fn is_whisper_compatible_provider(id: &str) -> bool {
     matches!(id, "whisper" | "qwen" | "siliconflow" | "zhipu" | "groq")
 }
 
+/// QA 路径专用：begin_qa_session 永远走 Volcengine 流式（低延迟要求），所以
+/// 凭据校验也只看 Volcengine 字段，不依赖 active_asr。dictation 路径请用
+/// `ensure_asr_credentials`。
+fn ensure_qa_volcengine_credentials() -> Result<(), String> {
+    let creds = read_volc_credentials();
+    if creds.app_id.trim().is_empty() || creds.access_token.trim().is_empty() {
+        Err("请先在设置中填写火山引擎 ASR App Key 和 Access Key".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 /// 润色文本；失败时返回原文 + 失败原因，调用方据此弹错误胶囊 + 写历史 error_code。
 /// 之前固定返回 String，调用方拿不到失败信号 → 用户感知"为什么风格设置没生效"。issue #57。
 async fn polish_or_passthrough(
@@ -1752,7 +1764,11 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     // 2. 凭据缺失走静默 fallback：与 dictation 一致的"用户的话不丢"约定。
     //    缺火山凭据 → 后续 Recorder 仍会跑，只是 ASR 拿不到结果，end_qa_session
     //    会发 idle 事件关浮窗。
-    if let Err(message) = ensure_asr_credentials() {
+    //    注意：QA 强制走 Volcengine 流式（见下方注释），所以这里必须直接校验
+    //    Volcengine 字段，不能复用 `ensure_asr_credentials`——后者会按用户在设置
+    //    里选的 active_asr 走 OpenAI 兼容分支，让 QA 把 `asr.api_key` 当成必要项，
+    //    或在 Volcengine 凭据其实为空时误判通过。Codex P1，PR #213。
+    if let Err(message) = ensure_qa_volcengine_credentials() {
         log::warn!("[coord] QA: ASR credentials missing: {message}");
         finish_qa_with_error(inner, format!("缺少 ASR 凭据：{message}"));
         return Err(message);
