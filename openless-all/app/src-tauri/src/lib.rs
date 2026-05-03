@@ -483,7 +483,8 @@ fn activate_app<R: Runtime>(_app: &AppHandle<R>) {}
 /// 不调 NSApp.activate，不抢其他 app 焦点，符合 CLAUDE.md 约束。
 #[cfg(target_os = "macos")]
 pub(crate) fn restore_main_window_key_if_active<R: Runtime>(app: &AppHandle<R>) {
-    let _ = app.run_on_main_thread(|| {
+    let main = app.get_webview_window("main");
+    let _ = app.run_on_main_thread(move || {
         use objc2::msg_send;
         use objc2::runtime::{AnyClass, AnyObject, Bool};
         unsafe {
@@ -498,11 +499,18 @@ pub(crate) fn restore_main_window_key_if_active<R: Runtime>(app: &AppHandle<R>) 
             if !is_active.as_bool() {
                 return;
             }
-            let main_win: *mut AnyObject = msg_send![ns_app, mainWindow];
-            if main_win.is_null() {
+            let Some(main) = main else {
                 return;
-            }
-            let _: () = msg_send![main_win, makeKeyWindow];
+            };
+            match main.ns_window() {
+                Ok(handle) => {
+                    let main_win = handle as *mut AnyObject;
+                    if !main_win.is_null() {
+                        let _: () = msg_send![main_win, makeKeyWindow];
+                    }
+                }
+                Err(e) => log::warn!("[main] ns_window unavailable for key restore: {e}"),
+            };
         }
     });
 }
