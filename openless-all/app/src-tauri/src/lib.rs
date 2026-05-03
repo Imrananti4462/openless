@@ -486,7 +486,8 @@ fn activate_app<R: Runtime>(_app: &AppHandle<R>) {}
 /// 不调 NSApp.activate，不抢其他 app 焦点，符合 CLAUDE.md 约束。
 #[cfg(target_os = "macos")]
 pub(crate) fn restore_main_window_key_if_active<R: Runtime>(app: &AppHandle<R>) {
-    let _ = app.run_on_main_thread(|| {
+    let main = app.get_webview_window("main");
+    let _ = app.run_on_main_thread(move || {
         use objc2::msg_send;
         use objc2::runtime::{AnyClass, AnyObject, Bool};
         unsafe {
@@ -501,11 +502,18 @@ pub(crate) fn restore_main_window_key_if_active<R: Runtime>(app: &AppHandle<R>) 
             if !is_active.as_bool() {
                 return;
             }
-            let main_win: *mut AnyObject = msg_send![ns_app, mainWindow];
-            if main_win.is_null() {
+            let Some(main) = main else {
                 return;
-            }
-            let _: () = msg_send![main_win, makeKeyWindow];
+            };
+            match main.ns_window() {
+                Ok(handle) => {
+                    let main_win = handle as *mut AnyObject;
+                    if !main_win.is_null() {
+                        let _: () = msg_send![main_win, makeKeyWindow];
+                    }
+                }
+                Err(e) => log::warn!("[main] ns_window unavailable for key restore: {e}"),
+            };
         }
     });
 }
@@ -753,9 +761,12 @@ fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
 
     #[cfg(not(target_os = "windows"))]
     {
+        // macOS / Linux：固定 220×110，与 1.2.11 行为一致 — 录音 / 翻译徽章
+        // 共用同一个窗口尺寸，避免按 Shift 后窗口高度变化导致胶囊整体下移。
+        let _ = translation_active;
         CapsuleWindowBounds {
-            width: 176.0,
-            height: if translation_active { 110.0 } else { 42.0 },
+            width: 220.0,
+            height: 110.0,
             bottom_inset: 0.0,
         }
     }
@@ -769,7 +780,7 @@ fn capsule_visual_height(_translation_active: bool) -> f64 {
 
     #[cfg(not(target_os = "windows"))]
     {
-        42.0
+        96.0
     }
 }
 
@@ -788,7 +799,7 @@ mod tests {
         assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 84.0, 12.0));
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (176.0, 42.0, 0.0));
+        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 110.0, 0.0));
     }
 
     #[test]
@@ -798,7 +809,7 @@ mod tests {
         assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 118.0, 12.0));
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (176.0, 110.0, 0.0));
+        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 110.0, 0.0));
     }
 
     #[test]
@@ -807,7 +818,7 @@ mod tests {
         assert_eq!(capsule_visual_height(true), 52.0);
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!(capsule_visual_height(true), 42.0);
+        assert_eq!(capsule_visual_height(true), 96.0);
     }
 
     #[test]
@@ -816,6 +827,6 @@ mod tests {
         assert_eq!(capsule_height_for_qa(), 52.0);
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!(capsule_height_for_qa(), 42.0);
+        assert_eq!(capsule_height_for_qa(), 96.0);
     }
 }

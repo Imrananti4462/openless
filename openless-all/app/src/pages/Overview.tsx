@@ -70,29 +70,6 @@ export function Overview({ onOpenHistory }: OverviewProps) {
         kicker={t('overview.kicker')}
         title={t('overview.title')}
         desc={t('overview.desc')}
-        right={
-          <div
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 8,
-              padding: '6px 12px',
-              borderRadius: 999,
-              border: '0.5px solid var(--ol-line-strong)',
-              background: 'var(--ol-surface-2)',
-              color: 'var(--ol-ink-3)',
-              fontSize: 12,
-            }}
-          >
-            <Icon name="cmd" size={12} />
-            {t('overview.pressPrefix')}
-            <kbd style={{
-              padding: '2px 7px', fontSize: 11, fontFamily: 'var(--ol-font-mono)',
-              background: '#fff', borderRadius: 5,
-              border: '0.5px solid var(--ol-line-strong)',
-              color: 'var(--ol-ink)',
-            }}>{getHotkeyTriggerLabel(hotkey?.trigger)}</kbd>
-            {t('overview.pressSuffix')}
-          </div>
-        }
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 18 }}>
@@ -230,7 +207,7 @@ function WeekChart({ data }: { data: number[] }) {
                 borderRadius: 4,
                 background: isToday ? 'var(--ol-blue)' : 'var(--ol-ink)',
                 opacity: v === 0 ? 0.15 : isToday ? 1 : 0.85,
-                transition: 'height 0.18s ease-out, opacity 0.18s ease-out',
+                transition: 'height 0.18s var(--ol-motion-soft), opacity 0.18s var(--ol-motion-soft)',
               }}
             />
           </div>

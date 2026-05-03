@@ -2532,7 +2532,7 @@ fn restore_focus_target_if_possible(target: Option<usize>) -> bool {
         let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
     }
     let _ = unsafe { SetForegroundWindow(hwnd) };
-    std::thread::sleep(Duration::from_millis(60));
+    std::thread::sleep(std::time::Duration::from_millis(60));
 
     let foreground = unsafe { GetForegroundWindow() };
     if foreground != hwnd {
@@ -2548,23 +2548,24 @@ fn restore_focus_target_if_possible(_target: Option<usize>) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn show_capsule_window_no_activate() -> bool {
-    use std::iter::once;
-    use windows::core::PCWSTR;
+fn show_capsule_window_no_activate<R: tauri::Runtime>(
+    _app: &AppHandle<R>,
+    window: &tauri::WebviewWindow<R>,
+) -> bool {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
-        SWP_NOSIZE, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
+        SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
     };
 
-    let title: Vec<u16> = "OpenLess Capsule".encode_utf16().chain(once(0)).collect();
-    let hwnd = match unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) } {
-        Ok(hwnd) => hwnd,
-        Err(_) => return false,
-    };
-    if hwnd == HWND::default() || hwnd.0.is_null() {
+    let Ok(handle) = window.window_handle() else {
         return false;
-    }
+    };
+    let RawWindowHandle::Win32(raw) = handle.as_raw() else {
+        return false;
+    };
+    let hwnd = HWND(raw.hwnd.get() as *mut _);
 
     let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
     let _ = unsafe {
@@ -2581,8 +2582,15 @@ fn show_capsule_window_no_activate() -> bool {
     true
 }
 
+// macOS / Linux 上不走 no-activate 路径：胶囊由 emit_capsule 的 fallback
+// `window.show()` 直接显示，再用 restore_main_window_key_if_active 把焦点还给
+// 主窗口。这是 1.2.11 的实现 — 单独走 orderFrontRegardless 会让胶囊在 webview
+// 未完整初始化时偶发不可见。
 #[cfg(not(target_os = "windows"))]
-fn show_capsule_window_no_activate() -> bool {
+fn show_capsule_window_no_activate<R: tauri::Runtime>(
+    _app: &AppHandle<R>,
+    _window: &tauri::WebviewWindow<R>,
+) -> bool {
     false
 }
 
@@ -2651,15 +2659,11 @@ fn emit_capsule(
         let visible = !matches!(state, CapsuleState::Idle);
         maybe_position_capsule_bottom_center(inner, &window, payload.translation);
         if show_capsule && visible {
-            if cfg!(target_os = "windows") {
-                if !show_capsule_window_no_activate() {
-                    let _ = window.show();
-                }
-            } else {
+            if !show_capsule_window_no_activate(&app, &window) {
                 let _ = window.show();
             }
-            // 胶囊 show() 在 macOS 会调 makeKeyAndOrderFront: 抢走主窗口焦点。
-            // 若 OpenLess 已是前台 app，用 makeKeyWindow 还原主窗口（不激活 NSApp）。
+            // macOS/Windows 优先走 no-activate show，避免录音胶囊抢走主窗口点击焦点。
+            // 若 fallback 到 show()，OpenLess 已是前台 app 时再把 key window 还给 main。
             #[cfg(target_os = "macos")]
             crate::restore_main_window_key_if_active(&app);
         } else {

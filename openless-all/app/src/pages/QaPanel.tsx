@@ -315,7 +315,7 @@ function LevelBar({ level }: { level: number }) {
           height: '100%',
           width: `${pct}%`,
           background: 'var(--ol-blue)',
-          transition: 'width 0.08s ease-out',
+          transition: 'width 0.08s var(--ol-motion-quick)',
         }}
       />
     </div>
@@ -398,7 +398,7 @@ function StreamingAssistantBubble({ markdown }: { markdown: string }) {
           height: 12,
           background: 'var(--ol-blue)',
           marginLeft: 12,
-          animation: 'qa-pulse 0.9s ease-in-out infinite',
+          animation: 'qa-pulse 0.9s var(--ol-motion-soft) infinite',
           borderRadius: 1,
         }}
       />
@@ -524,7 +524,7 @@ function SkeletonLine({ width }: { width: string }) {
         background:
           'linear-gradient(90deg, rgba(0,0,0,0.06) 0%, rgba(0,0,0,0.12) 50%, rgba(0,0,0,0.06) 100%)',
         backgroundSize: '200% 100%',
-        animation: 'qa-skeleton 1.4s ease-in-out infinite',
+        animation: 'qa-skeleton 1.4s var(--ol-motion-soft) infinite',
       }}
     />
   );
@@ -576,7 +576,7 @@ const iconBtnBaseStyle: CSSProperties = {
   justifyContent: 'center',
   cursor: 'default',
   padding: 0,
-  transition: 'background 0.12s ease-out, color 0.12s ease-out',
+  transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
 };
 
 const contentStyle: CSSProperties = {
@@ -673,7 +673,7 @@ const recordingDotStyle: CSSProperties = {
   height: 8,
   borderRadius: '50%',
   background: 'var(--ol-err)',
-  animation: 'qa-pulse 1.2s ease-in-out infinite',
+  animation: 'qa-pulse 1.2s var(--ol-motion-soft) infinite',
 };
 
 const statusBarStyle: CSSProperties = {
@@ -689,12 +689,13 @@ const statusBarStyle: CSSProperties = {
 
 const globalCss = `
 @keyframes qa-skeleton {
-  0%   { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  0%   { background-position: 200% 0; filter: blur(.2px); }
+  50%  { filter: blur(0); }
+  100% { background-position: -200% 0; filter: blur(.2px); }
 }
 @keyframes qa-pulse {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.35; }
+  0%, 100% { opacity: 1; filter: blur(0); transform: scale(1); }
+  50%      { opacity: 0.35; filter: blur(.7px); transform: scale(.94); }
 }
 .qa-answer p        { margin: 0 0 6px; }
 .qa-answer p:last-child { margin-bottom: 0; }

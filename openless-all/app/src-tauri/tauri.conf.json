@@ -21,11 +21,12 @@
         "minWidth": 980,
         "minHeight": 640,
         "resizable": true,
-        "decorations": false,
+        "decorations": true,
         "transparent": true,
         "shadow": true,
         "hiddenTitle": true,
         "titleBarStyle": "Overlay",
+        "trafficLightPosition": { "x": 14, "y": 20 },
         "visible": false,
         "acceptFirstMouse": true
       },
