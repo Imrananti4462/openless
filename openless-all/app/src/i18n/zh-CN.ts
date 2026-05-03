@@ -266,6 +266,7 @@ export const zhCN = {
       restoreClipboardDesc: '仅 Windows / Linux：粘贴成功后恢复你原来的剪贴板内容（默认开）。关掉就把听写文本留在剪贴板，模拟粘贴没真正落地时可以手动 Ctrl+V 找回。详见 issue #111。',
       startupAtBoot: '开机自启',
       startupAtBootDesc: '登录后自动启动 OpenLess。macOS 写 LaunchAgent，Linux 写 ~/.config/autostart，Windows 写 HKCU\\Run（不需要管理员）。详见 issue #194。',
+      startupAtBootError: '开机自启切换失败：{{message}}',
     },
     providers: {
       llmTitle: 'LLM 模型（润色）',

@@ -268,6 +268,7 @@ export const en: typeof zhCN = {
       restoreClipboardDesc: 'Windows / Linux only: restore your original clipboard after a successful paste (default on). Turn off to keep the dictation text in the clipboard so you can manually Ctrl+V if the simulated paste did not actually land. See issue #111.',
       startupAtBoot: 'Launch at login',
       startupAtBootDesc: 'Start OpenLess automatically when you sign in. macOS uses a LaunchAgent, Linux writes ~/.config/autostart, Windows writes HKCU\\Run (no admin required). See issue #194.',
+      startupAtBootError: 'Failed to toggle launch at login: {{message}}',
     },
     providers: {
       llmTitle: 'LLM (polishing)',

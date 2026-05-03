@@ -248,6 +248,10 @@ function AutostartRow() {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  // 切 plist / 注册表失败时给用户看的错误。null = 没有失败/上次操作已成功。
+  // 不渲染等于把失败吞掉 —— Windows 写 HKCU\Run 被组策略拦、macOS 写
+  // LaunchAgent plist 权限不够 都是真实可能。issue #194。
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -269,12 +273,14 @@ function AutostartRow() {
 
   const onToggle = async (next: boolean) => {
     setEnabled(next);
+    setError(null);
     try {
       if (next) await enableAutostart();
       else await disableAutostart();
     } catch (err) {
       console.error('[autostart] toggle failed', err);
       setEnabled(!next);
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -283,7 +289,14 @@ function AutostartRow() {
       label={t('settings.recording.startupAtBoot')}
       desc={t('settings.recording.startupAtBootDesc')}
     >
-      {loaded ? <Toggle on={enabled} onToggle={onToggle} /> : null}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {loaded ? <Toggle on={enabled} onToggle={onToggle} /> : null}
+        {error && (
+          <div style={{ fontSize: 11, color: 'var(--ol-err)', marginTop: 4, lineHeight: 1.5 }}>
+            {t('settings.recording.startupAtBootError', { message: error })}
+          </div>
+        )}
+      </div>
     </SettingRow>
   );
 }
