@@ -22,16 +22,13 @@ import {
   HOTKEY_MODE_MIGRATION_DEFERRED_KEY,
   shouldShowHotkeyModeMigrationPrompt,
 } from '../lib/hotkeyMigration';
-import { getHotkeyTriggerLabel } from '../lib/hotkey';
 import { applyFontScale, readFontScale } from '../lib/fontScale';
 import { getCredentials, openExternal } from '../lib/ipc';
-import { OL_DATA } from '../lib/mockData';
 import {
   PROVIDER_SETUP_PROMPT_DEFERRED_KEY,
   shouldShowProviderSetupPrompt,
 } from '../lib/providerSetup';
 import type { SettingsSectionId } from '../pages/Settings';
-import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { useAppState, type AppTab } from '../state/useAppState';
 
 interface NavItem {
@@ -75,7 +72,6 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
   const [helpPopoverOpen, setHelpPopoverOpen] = useState(false);
-  const { hotkey } = useHotkeySettings();
 
   // 字体档位 — 启动时按 localStorage 应用一次；之后改动来自 Settings 的"个性化"section。
   useEffect(() => {
@@ -212,33 +208,12 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
 
                   <Icon name={n.icon} size={14} />
                   <span style={{ flex: 1 }}>{n.name}</span>
-                  {n.id === 'history' &&
-                  <span style={{
-                    fontSize: 10, fontFamily: 'var(--ol-font-mono)',
-                    color: active ? 'var(--ol-ink-4)' : 'var(--ol-ink-5)',
-                  }}>{OL_DATA.history.length}</span>
-                  }
                 </button>
               );
             })}
           </nav>
 
           <div style={{ flex: 1 }} />
-
-          {/* shortcut hint — 不要 dashed 边框，否则会切断"整片磨砂玻璃"的视觉 */}
-          <div style={{ padding: '10px 10px 6px', marginTop: 6 }}>
-            <div style={{ fontSize: 10.5, color: 'var(--ol-ink-4)', marginBottom: 6, letterSpacing: '0.02em' }}>{t('shell.shortcutLabel')}</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--ol-ink-2)' }}>
-              <kbd style={{
-              padding: '2px 7px', fontSize: 10.5,
-                background: 'rgba(255,255,255,0.7)', borderRadius: 5,
-                border: '0.5px solid var(--ol-line-strong)',
-                fontFamily: 'var(--ol-font-mono)', color: 'var(--ol-ink)',
-                boxShadow: '0 1px 0 rgba(0,0,0,.04)',
-              }}>{getHotkeyTriggerLabel(hotkey?.trigger)}</kbd>
-              <span style={{ color: 'var(--ol-ink-4)' }}>{t('shell.shortcutHint')}</span>
-            </div>
-          </div>
 
           {/* BETA 区域 — 去掉描边和实色背景，让它和底部 footer 一起浮在磨砂玻璃上 */}
           <div style={{ marginTop: 8, padding: '10px 10px 4px' }}>
