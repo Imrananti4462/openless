@@ -905,7 +905,7 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     let active_asr = CredentialsVault::get_active_asr();
 
-    if active_asr == "whisper" {
+    if is_whisper_compatible_provider(&active_asr) {
         let (api_key, base_url, model) = read_whisper_credentials();
         let whisper = Arc::new(WhisperBatchASR::new(api_key, base_url, model));
         *inner.asr.lock() = Some(ActiveAsr::Whisper(Arc::clone(&whisper)));
@@ -1540,13 +1540,13 @@ fn ensure_microphone_permission(_inner: &Arc<Inner>) -> Result<(), String> {
 
 fn ensure_asr_credentials() -> Result<(), String> {
     let active_asr = CredentialsVault::get_active_asr();
-    if active_asr == "whisper" {
+    if is_whisper_compatible_provider(&active_asr) {
         let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
             .ok()
             .flatten()
             .unwrap_or_default();
         if api_key.trim().is_empty() {
-            return Err("请先在设置中填写 Whisper ASR API Key".to_string());
+            return Err("请先在设置中填写 ASR 服务商 API Key".to_string());
         }
         return Ok(());
     }
@@ -1557,6 +1557,13 @@ fn ensure_asr_credentials() -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+/// `whisper` 是 OpenAI 原生；`qwen` / `siliconflow` / `zhipu` / `groq` 都暴露
+/// OpenAI 兼容的 `/audio/transcriptions`，统一走 `WhisperBatchASR`。
+/// 新增 OpenAI 兼容 ASR 时只需在这里加一项。
+fn is_whisper_compatible_provider(id: &str) -> bool {
+    matches!(id, "whisper" | "qwen" | "siliconflow" | "zhipu" | "groq")
 }
 
 /// 润色文本；失败时返回原文 + 失败原因，调用方据此弹错误胶囊 + 写历史 error_code。

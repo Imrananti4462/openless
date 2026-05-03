@@ -274,11 +274,18 @@ type LlmPresetId = typeof LLM_PRESETS[number]['id'];
 
 const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 
-// SiliconFlow ASR 暂未在后端实现（coordinator.rs 只路由 whisper / volcengine）。
-// 在后端接入前不暴露给用户，避免选了之后必然失败。重新启用见 issue #58 的 follow-up。
+// `volcengine` 走自建流式客户端；其余走 OpenAI 兼容 `/audio/transcriptions`
+// （`coordinator.rs::is_whisper_compatible_provider`）。新增兼容厂商：
+//   1. 在这里加一项 `{ id, nameKey, baseUrl, model }`；
+//   2. `coordinator.rs::is_whisper_compatible_provider` 加同名 id；
+//   3. 在 i18n 的 `settings.providers.presets.<nameKey>` 加文案。
 const ASR_PRESETS = [
-  { id: 'volcengine',  nameKey: 'asrVolcengine'  },
-  { id: 'whisper',     nameKey: 'asrWhisper'     },
+  { id: 'volcengine',   nameKey: 'asrVolcengine',   baseUrl: '',                                              model: ''                              },
+  { id: 'qwen',         nameKey: 'asrQwen',         baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen3-asr-flash'           },
+  { id: 'siliconflow',  nameKey: 'asrSiliconflow',  baseUrl: 'https://api.siliconflow.cn/v1',                  model: 'FunAudioLLM/SenseVoiceSmall' },
+  { id: 'zhipu',        nameKey: 'asrZhipu',        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',           model: 'glm-asr-2512'                },
+  { id: 'groq',         nameKey: 'asrGroq',         baseUrl: 'https://api.groq.com/openai/v1',                 model: 'whisper-large-v3-turbo'      },
+  { id: 'whisper',      nameKey: 'asrWhisper',      baseUrl: 'https://api.openai.com/v1',                      model: 'whisper-1'                   },
 ] as const;
 
 type AsrPresetId = typeof ASR_PRESETS[number]['id'];
@@ -319,9 +326,20 @@ function ProvidersSection() {
       const next = { ...prefs, activeAsrProvider: id };
       await updatePrefs(next);
     }
+    // 切换到 OpenAI 兼容厂商时同步预填 endpoint + model：每家 base URL / 模型 ID
+    // 都是固定的，不预填用户必然踩坑。volcengine 走另一套凭据，跳过。
+    const preset = ASR_PRESETS.find(p => p.id === id);
+    if (preset && preset.baseUrl) {
+      await setCredential('asr.endpoint', preset.baseUrl);
+    }
+    if (preset && preset.model) {
+      await setCredential('asr.model', preset.model);
+      setAsrModelRevision(v => v + 1);
+    }
   };
 
   const preset = LLM_PRESETS.find(p => p.id === llmProvider) ?? LLM_PRESETS[LLM_PRESETS.length - 1];
+  const asrPreset = ASR_PRESETS.find(p => p.id === asrProvider);
 
   return (
     <>
@@ -397,9 +415,10 @@ function ProvidersSection() {
           <>
             <CredentialField key={`${asrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" mono mask />
             <CredentialField key={`${asrProvider}:endpoint`} label={t('settings.providers.baseUrlLabel')} account="asr.endpoint"
-              placeholder="https://api.openai.com/v1" defaultValue="https://api.openai.com/v1" />
+              placeholder={asrPreset?.baseUrl || 'https://api.openai.com/v1'}
+              defaultValue={asrPreset?.baseUrl || undefined} />
             <CredentialField key={`${asrProvider}:model:${asrModelRevision}`} label={t('settings.providers.modelLabel')} account="asr.model"
-              placeholder="whisper-1" />
+              placeholder={asrPreset?.model || 'whisper-1'} />
             <ProviderTools kind="asr" modelAccount="asr.model" onModelSelected={() => setAsrModelRevision(v => v + 1)} />
           </>
         )}
