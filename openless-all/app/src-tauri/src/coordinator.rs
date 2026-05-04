@@ -1388,6 +1388,8 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         "[coord] 全局超时 {} 秒 - 强制恢复",
                         COORDINATOR_GLOBAL_TIMEOUT_SECS
                     );
+                    // 清理 ASR session，避免资源泄漏
+                    asr.cancel();
                     emit_capsule(
                         inner,
                         CapsuleState::Error,
@@ -2286,12 +2288,25 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     if let Err(e) = asr.send_last_frame().await {
         log::error!("[coord] QA: send last frame failed: {e}");
     }
-    let raw = match asr.await_final_result().await {
-        Ok(r) => r,
-        Err(e) => {
+    // 添加全局超时保护：防止 await_final_result() 永远挂起
+    let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+    let raw = match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
             log::error!("[coord] QA: await final failed: {e}");
             finish_qa_with_error(inner, format!("识别失败: {e}"));
             return Err(e.to_string());
+        }
+        Err(_) => {
+            // 全局超时：最后的防线
+            log::error!(
+                "[coord] QA: 全局超时 {} 秒 - 强制恢复",
+                COORDINATOR_GLOBAL_TIMEOUT_SECS
+            );
+            // 清理 ASR session，避免资源泄漏
+            asr.cancel();
+            finish_qa_with_error(inner, "识别超时".to_string());
+            return Err("global timeout".to_string());
         }
     };
 

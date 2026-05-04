@@ -330,7 +330,8 @@ impl StreamState {
             callback_count: AtomicUsize::new(0),
             peak_input_rms_milli: AtomicUsize::new(0),
             peak_output_rms_milli: AtomicUsize::new(0),
-            last_callback_time: Mutex::new(Some(std::time::Instant::now())),
+            // 初始化为 None，只有在第一次回调后才开始计时，避免误报慢启动设备
+            last_callback_time: Mutex::new(None),
         }
     }
 }
