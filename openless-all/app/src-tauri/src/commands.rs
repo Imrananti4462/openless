@@ -293,23 +293,27 @@ async fn validate_asr_transcription(config: &ProviderConfig, model: &str) -> Res
 }
 
 fn asr_transcriptions_url(base_url: &str) -> Result<String, String> {
-    let trimmed = base_url.trim().trim_end_matches('/');
-    let parsed = reqwest::Url::parse(trimmed).map_err(|_| "endpointInvalid".to_string())?;
+    let parsed = reqwest::Url::parse(base_url.trim()).map_err(|_| "endpointInvalid".to_string())?;
     let host = parsed.host_str().unwrap_or_default();
     let localhost = host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1";
     if parsed.scheme() != "https" && !localhost {
         return Err("endpointMustUseHttps".to_string());
     }
-    if trimmed.ends_with("/audio/transcriptions") {
-        return Ok(trimmed.to_string());
-    }
-    if trimmed.ends_with("/audio") {
-        return Ok(format!("{trimmed}/transcriptions"));
-    }
-    if let Some(prefix) = trimmed.strip_suffix("/chat/completions") {
-        return Ok(format!("{prefix}/audio/transcriptions"));
-    }
-    Ok(format!("{trimmed}/audio/transcriptions"))
+
+    // Work on the URL path only so we don't corrupt query parameters.
+    let mut url = parsed.clone();
+    let path = parsed.path().trim_end_matches('/');
+    let next_path = if path.ends_with("/audio/transcriptions") {
+        path.to_string()
+    } else if path.ends_with("/audio") {
+        format!("{path}/transcriptions")
+    } else if let Some(prefix) = path.strip_suffix("/chat/completions") {
+        format!("{prefix}/audio/transcriptions")
+    } else {
+        format!("{path}/audio/transcriptions")
+    };
+    url.set_path(&next_path);
+    Ok(url.to_string())
 }
 
 fn encode_wav_16k_mono_silence(duration_ms: u32) -> Vec<u8> {
@@ -754,6 +758,10 @@ mod tests {
         assert_eq!(
             asr_transcriptions_url("https://api.openai.com/v1/audio/transcriptions").unwrap(),
             "https://api.openai.com/v1/audio/transcriptions"
+        );
+        assert_eq!(
+            asr_transcriptions_url("https://api.openai.com/v1?api-version=2024-12-01").unwrap(),
+            "https://api.openai.com/v1/audio/transcriptions?api-version=2024-12-01"
         );
     }
 
