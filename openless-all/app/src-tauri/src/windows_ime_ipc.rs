@@ -3,9 +3,17 @@ use std::time::Duration;
 use crate::windows_ime_protocol::ImeSubmitStatus;
 
 pub const IME_CLIENT_WAIT_TIMEOUT: Duration = Duration::from_millis(700);
-// Must exceed the IME DLL owner-thread commit timeout (3000 ms), otherwise Rust
-// can fall back while the DLL later commits and duplicates insertion.
-pub const IME_SUBMIT_TIMEOUT: Duration = Duration::from_millis(3800);
+const IME_OWNER_THREAD_MESSAGE_TIMEOUT_MS: u64 = 3000;
+const IME_ASYNC_EDIT_SESSION_TIMEOUT_MS: u64 = 3000;
+const IME_SUBMIT_TIMEOUT_MARGIN_MS: u64 = 1000;
+const IME_NATIVE_ASYNC_COMMIT_TIMEOUT_MS: u64 =
+    IME_OWNER_THREAD_MESSAGE_TIMEOUT_MS + IME_ASYNC_EDIT_SESSION_TIMEOUT_MS;
+
+// Must exceed the IME DLL owner-thread SendMessageTimeoutW wait plus the
+// async edit session wait, otherwise Rust can fall back while the DLL later
+// commits and duplicates insertion.
+pub const IME_SUBMIT_TIMEOUT: Duration =
+    Duration::from_millis(IME_NATIVE_ASYNC_COMMIT_TIMEOUT_MS + IME_SUBMIT_TIMEOUT_MARGIN_MS);
 const IME_PIPE_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 
 const ERROR_FILE_NOT_FOUND: u32 = 2;
@@ -380,6 +388,14 @@ mod tests {
         assert!(pending
             .accept_result("session-1", ImeSubmitStatus::Committed)
             .is_err());
+    }
+
+    #[test]
+    fn submit_timeout_covers_native_async_commit_path() {
+        assert!(
+            IME_SUBMIT_TIMEOUT
+                > Duration::from_millis(IME_NATIVE_ASYNC_COMMIT_TIMEOUT_MS)
+        );
     }
 
     #[test]
