@@ -260,9 +260,13 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
                     两列内部各自的 overflow:auto 才能独立滚动 */}
             <div
               key={displayTab}
+              // issue #243：Overview 是 dashboard，期望「一眼看完」不滚动；
+              // 其余页（History / Vocab / Style / Translation / SelectionAsk）继续允许
+              // 滚动但走细 scrollbar，不抢眼。
+              className={displayTab === 'overview' ? undefined : 'ol-thinscroll'}
               style={{
                 flex: 1, minHeight: 0,
-                overflow: 'auto',
+                overflow: displayTab === 'overview' ? 'hidden' : 'auto',
                 padding: '24px 28px 32px',
                 // 苹果"spring out"风格的曲线：开始快、收尾顺滑，符合人体直觉
                 animation: tabPhase === 'exiting'
