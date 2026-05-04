@@ -226,13 +226,16 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set +e
+          # 顺序很关键：NSIS 必须先跑、产出 *_x64-setup.exe(.sig) 给 updater 用。
+          # Tauri 的 "all" 默认按字母序 msi→nsis，MSI 一旦 ICE80 挂掉就 short-circuit
+          # 整个 bundle 流程，NSIS 完全没机会执行。显式 --bundles nsis,msi 强制顺序。
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            npm run tauri -- build --config '{"bundle":{"createUpdaterArtifacts":true}}'
+            npm run tauri -- build --bundles nsis,msi --config '{"bundle":{"createUpdaterArtifacts":true}}'
           else
-            npm run tauri build
+            npm run tauri -- build --bundles nsis,msi
           fi
           echo "TAURI_BUILD_EXIT=$?" >> "$GITHUB_ENV"
-          # 不直接退出失败：下一步 Repair 还有兜底机会。
+          # 不直接退出失败：下一步 Repair 还有兜底机会（NSIS 已先于 MSI 写盘）。
           exit 0
 
       # ── 如果 tauri 在 wix link 阶段失败（candle 出了 wixobj，但 light 因 cwd
