@@ -1550,14 +1550,14 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     // polish 失败时在 history 里标记 polishFailed，让用户能在历史详情看到为什么这次输出
     // 不是预期的 mode 风格。即使失败也不丢词 — final_text 仍是原文（保留"用户的话不丢"语义）。
-    let tsf_required_insert_failed = cfg!(target_os = "windows")
-        && !allow_non_tsf_insertion_fallback
-        && status == InsertStatus::Failed;
-    let error_code = if tsf_required_insert_failed {
-        Some("windowsImeTsfRequired".to_string())
-    } else {
-        polish_error.as_ref().map(|_| "polishFailed".to_string())
-    };
+    let error_code = dictation_error_code(
+        status,
+        polish_error.is_some(),
+        focus_ready_for_paste,
+        allow_non_tsf_insertion_fallback,
+    )
+    .map(str::to_string);
+    let tsf_required_insert_failed = error_code.as_deref() == Some("windowsImeTsfRequired");
 
     let session = DictationSession {
         id: Uuid::new_v4().to_string(),
@@ -1613,6 +1613,27 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
 
     Ok(())
+}
+
+fn dictation_error_code(
+    status: InsertStatus,
+    polish_failed: bool,
+    focus_ready_for_paste: bool,
+    allow_non_tsf_insertion_fallback: bool,
+) -> Option<&'static str> {
+    if !focus_ready_for_paste && status == InsertStatus::Failed {
+        Some("focusRestoreFailed")
+    } else if cfg!(target_os = "windows")
+        && focus_ready_for_paste
+        && !allow_non_tsf_insertion_fallback
+        && status == InsertStatus::Failed
+    {
+        Some("windowsImeTsfRequired")
+    } else if polish_failed {
+        Some("polishFailed")
+    } else {
+        None
+    }
 }
 
 fn cancel_session(inner: &Arc<Inner>) {
@@ -2749,6 +2770,31 @@ mod tests {
     }
 
     #[test]
+    fn focus_restore_failure_uses_specific_error_code_when_insert_fails() {
+        assert_eq!(
+            dictation_error_code(InsertStatus::Failed, false, false, false),
+            Some("focusRestoreFailed")
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn missing_windows_hwnd_is_not_present() {
+        use windows::Win32::Foundation::HWND;
+
+        assert!(!windows_hwnd_is_present(HWND::default()));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn tsf_required_failure_keeps_tsf_error_when_focus_was_ready() {
+        assert_eq!(
+            dictation_error_code(InsertStatus::Failed, false, true, false),
+            Some("windowsImeTsfRequired")
+        );
+    }
+
+    #[test]
     fn startup_race_check_treats_newer_session_as_stale() {
         let mut state = SessionState::default();
         state.phase = SessionPhase::Starting;
@@ -3018,13 +3064,18 @@ fn restore_focus_target_if_possible(_target: Option<usize>) -> bool {
 }
 
 #[cfg(target_os = "windows")]
+fn windows_hwnd_is_present(hwnd: windows::Win32::Foundation::HWND) -> bool {
+    hwnd != windows::Win32::Foundation::HWND::default()
+}
+
+#[cfg(target_os = "windows")]
 fn capture_ime_submit_target() -> Option<ImeSubmitTarget> {
     use windows::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
     };
 
     let foreground = unsafe { GetForegroundWindow() };
-    if foreground.0.is_null() {
+    if !windows_hwnd_is_present(foreground) {
         return None;
     }
 
@@ -3040,7 +3091,7 @@ fn capture_ime_submit_target() -> Option<ImeSubmitTarget> {
         ..Default::default()
     };
     let target_window = if unsafe { GetGUIThreadInfo(foreground_thread_id, &mut gui_info).is_ok() }
-        && !gui_info.hwndFocus.0.is_null()
+        && windows_hwnd_is_present(gui_info.hwndFocus)
     {
         gui_info.hwndFocus
     } else {
