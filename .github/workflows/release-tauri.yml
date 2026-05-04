@@ -187,6 +187,32 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bash scripts/build-mac.sh
 
+      # ── Windows：先 build OpenLessIme.dll(x64+x86)，再跑 tauri bundle。
+      #    openless-ime.wxs 引用 src-tauri\target\windows-ime-msvc\{x64,x86}\Release\OpenLessIme.dll；
+      #    没有这一步 light.exe 链接 MSI 时找不到 DLL → 整个 Windows release 挂掉。
+      - name: Build Windows IME native DLLs
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        working-directory: 'openless-all/app'
+        run: |
+          $appRoot = (Resolve-Path .).Path
+          foreach ($t in @(
+            @{ Platform = 'x64';   Folder = 'x64' },
+            @{ Platform = 'Win32'; Folder = 'x86' }
+          )) {
+            $out = Join-Path $appRoot "src-tauri\target\windows-ime-msvc\$($t.Folder)\Release"
+            $obj = Join-Path $appRoot "src-tauri\target\windows-ime-msvc\obj\$($t.Folder)\Release"
+            ./scripts/windows-ime-build.ps1 -Configuration Release -Platform $t.Platform -OutputDirectory $out -IntermediateDirectory $obj
+            if ($LASTEXITCODE -ne 0) {
+              throw "OpenLessIme $($t.Platform) build failed with exit $LASTEXITCODE"
+            }
+            $dll = Join-Path $out 'OpenLessIme.dll'
+            if (-not (Test-Path $dll)) {
+              throw "OpenLessIme.dll not produced at $dll"
+            }
+            Write-Host "[ok] built $dll"
+          }
+
       # ── Windows：仅 Windows 跑通用 tauri build（Linux 用下方专用 step，避免重复构建）──
       - name: Build (Windows)
         if: matrix.platform == 'windows-latest'
