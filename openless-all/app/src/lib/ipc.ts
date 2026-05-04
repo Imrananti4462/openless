@@ -13,6 +13,7 @@ import type {
   QaHotkeyBinding,
   UserPreferences,
   WindowsImeStatus,
+  VocabPreset,
 } from './types';
 import { OL_DATA } from './mockData';
 
@@ -198,6 +199,14 @@ export function removeVocab(id: string): Promise<void> {
 
 export function setVocabEnabled(id: string, enabled: boolean): Promise<void> {
   return invokeOrMock('set_vocab_enabled', { id, enabled }, () => undefined);
+}
+
+export function listVocabPresets(): Promise<VocabPreset[]> {
+  return invokeOrMock('list_vocab_presets', undefined, () => []);
+}
+
+export function saveVocabPresets(presets: VocabPreset[]): Promise<void> {
+  return invokeOrMock('save_vocab_presets', { presets }, () => undefined);
 }
 
 // ── Dictation lifecycle ────────────────────────────────────────────────

@@ -4,7 +4,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { addVocab, isTauri, listVocab, removeVocab, setVocabEnabled } from '../lib/ipc';
-import type { DictionaryEntry } from '../lib/types';
+import type { DictionaryEntry, VocabPreset } from '../lib/types';
+import { DEFAULT_VOCAB_PRESETS, loadVocabPresets, persistVocabPresets } from '../lib/vocabPresets';
 import { Btn, Card, PageHeader } from './_atoms';
 
 export function Vocab() {
@@ -14,6 +15,11 @@ export function Vocab() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [error, setError] = useState<string | null>(null);
+  const [presets, setPresets] = useState<VocabPreset[]>(DEFAULT_VOCAB_PRESETS);
+  const [selectedPresetIds, setSelectedPresetIds] = useState<string[]>([]);
+  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
+  const [presetNameDraft, setPresetNameDraft] = useState('');
+  const [presetPhrasesDraft, setPresetPhrasesDraft] = useState('');
 
   const refresh = async () => {
     try {
@@ -30,6 +36,9 @@ export function Vocab() {
 
   useEffect(() => {
     refresh();
+    void loadVocabPresets()
+      .then(setPresets)
+      .catch(err => setError(err instanceof Error ? err.message : String(err)));
     // 订阅后端 vocab:updated：每段口述结束、record_hits 触发后由 coordinator 推送。
     // Vocab 页面打开期间能即时看到命中数累加，无需切到其他 tab 再切回。
     if (!isTauri) return;
@@ -82,6 +91,61 @@ export function Vocab() {
     }
   };
 
+  const togglePreset = (id: string) => {
+    setSelectedPresetIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+  };
+
+  const startEditPreset = (preset: VocabPreset) => {
+    setEditingPresetId(preset.id);
+    setPresetNameDraft(preset.name);
+    setPresetPhrasesDraft(preset.phrases.join(', '));
+  };
+
+  const savePreset = () => {
+    if (!editingPresetId) return;
+    const name = presetNameDraft.trim();
+    if (!name) return;
+    const phrases = Array.from(
+      new Set(
+        presetPhrasesDraft
+          .split(/[,\n]/)
+          .map(s => s.trim())
+          .filter(Boolean),
+      ),
+    );
+    const next = presets.map(p => (p.id === editingPresetId ? { ...p, name, phrases } : p));
+    setPresets(next);
+    void persistVocabPresets(next).catch(err => setError(err instanceof Error ? err.message : String(err)));
+    setEditingPresetId(null);
+  };
+
+  const createPreset = () => {
+    const next: VocabPreset = {
+      id: `user-${Date.now()}`,
+      name: t('vocab.presets.newPreset'),
+      phrases: [],
+    };
+    const updated = [...presets, next];
+    setPresets(updated);
+    void persistVocabPresets(updated).catch(err => setError(err instanceof Error ? err.message : String(err)));
+    startEditPreset(next);
+  };
+
+  const applySelectedPresets = async () => {
+    const selected = presets.filter(p => selectedPresetIds.includes(p.id));
+    if (selected.length === 0) return;
+    const phraseSet = new Set(entries.map(e => e.phrase.trim().toLowerCase()));
+    for (const p of selected) {
+      for (const phrase of p.phrases) {
+        if (!phraseSet.has(phrase.trim().toLowerCase())) {
+          await addVocab(phrase);
+          phraseSet.add(phrase.trim().toLowerCase());
+        }
+      }
+    }
+    await refresh();
+  };
+
   return (
     <>
       <PageHeader
@@ -95,6 +159,48 @@ export function Vocab() {
         }
       />
       <Card padding={0}>
+        <div style={{ padding: 18, borderBottom: '0.5px solid var(--ol-line)' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <strong style={{ fontSize: 12 }}>{t('vocab.presets.title')}</strong>
+            {presets.map(p => (
+              <button
+                key={p.id}
+                onClick={() => togglePreset(p.id)}
+                style={{
+                  border: '0.5px solid var(--ol-line-strong)',
+                  borderRadius: 999,
+                  padding: '4px 10px',
+                  fontSize: 12,
+                  background: selectedPresetIds.includes(p.id) ? 'var(--ol-blue-soft)' : 'var(--ol-surface-2)',
+                }}
+              >
+                {p.name}
+              </button>
+            ))}
+            <Btn size="sm" variant="ghost" onClick={createPreset}>{t('vocab.presets.create')}</Btn>
+            <Btn size="sm" variant="primary" onClick={applySelectedPresets}>{t('vocab.presets.apply')}</Btn>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 10 }}>{t('vocab.presets.tip')}</div>
+          {editingPresetId && (
+            <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
+              <input value={presetNameDraft} onChange={e => setPresetNameDraft(e.target.value)} placeholder={t('vocab.presets.namePlaceholder')} />
+              <textarea value={presetPhrasesDraft} onChange={e => setPresetPhrasesDraft(e.target.value)} placeholder={t('vocab.presets.wordsPlaceholder')} rows={3} />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Btn size="sm" variant="primary" onClick={savePreset}>{t('vocab.presets.save')}</Btn>
+                <Btn size="sm" variant="ghost" onClick={() => setEditingPresetId(null)}>{t('common.cancel')}</Btn>
+              </div>
+            </div>
+          )}
+          {!editingPresetId && presets.length > 0 && (
+            <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {presets.map(p => (
+                <Btn key={`${p.id}-edit`} size="sm" variant="ghost" onClick={() => startEditPreset(p)}>
+                  {t('vocab.presets.edit', { name: p.name })}
+                </Btn>
+              ))}
+            </div>
+          )}
+        </div>
         <div style={{ padding: 18, borderBottom: '0.5px solid var(--ol-line)' }}>
           <div style={{ display: 'flex', gap: 8 }}>
             <input

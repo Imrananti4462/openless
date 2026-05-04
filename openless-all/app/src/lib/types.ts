@@ -29,6 +29,12 @@ export interface DictionaryEntry {
   createdAt: string;
 }
 
+export interface VocabPreset {
+  id: string;
+  name: string;
+  phrases: string[];
+}
+
 export type HotkeyTrigger =
   | 'rightOption'
   | 'leftOption'

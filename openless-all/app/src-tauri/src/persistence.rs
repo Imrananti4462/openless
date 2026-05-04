@@ -22,7 +22,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::types::{DictationSession, DictionaryEntry, UserPreferences};
+use crate::types::{DictationSession, DictionaryEntry, UserPreferences, VocabPreset};
 
 const HISTORY_CAP: usize = 200;
 const HISTORY_FILE: &str = "history.json";
@@ -30,6 +30,7 @@ const PREFERENCES_FILE: &str = "preferences.json";
 /// 与 Swift `Sources/OpenLessPersistence/DictionaryStore.swift` 同名，
 /// 让旧版词汇表在升级后无缝继承。**不要**改成 `vocab.json`，会丢用户数据。
 const VOCAB_FILE: &str = "dictionary.json";
+const VOCAB_PRESETS_FILE: &str = "vocab-presets.json";
 
 /// Swift 老 `CredentialsVault` 的 JSON 备用路径。
 /// 升级到 Tauri 版后，先尝试 Keychain；Keychain 没有时回落读这个文件，
@@ -591,6 +592,20 @@ fn count_occurrences(haystack: &str, needle: &str) -> u64 {
         }
     }
     count
+}
+
+pub fn list_vocab_presets() -> Result<Vec<VocabPreset>> {
+    let dir = data_dir()?;
+    ensure_dir(&dir)?;
+    read_or_default::<Vec<VocabPreset>>(&dir.join(VOCAB_PRESETS_FILE))
+}
+
+pub fn save_vocab_presets(presets: &[VocabPreset]) -> Result<()> {
+    let dir = data_dir()?;
+    ensure_dir(&dir)?;
+    let path = dir.join(VOCAB_PRESETS_FILE);
+    let json = serde_json::to_vec_pretty(presets).context("encode vocab presets failed")?;
+    atomic_write(&path, &json)
 }
 
 // ───────────────────────── CredentialsVault ─────────────────────────
