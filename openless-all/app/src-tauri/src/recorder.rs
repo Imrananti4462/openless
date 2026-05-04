@@ -135,6 +135,7 @@ fn run_audio_thread(
     // 启动 liveness watchdog 线程：检测录音回调是否静默停止
     const WATCHDOG_CHECK_INTERVAL_MS: u64 = 1000;  // 每秒检查一次
     const CALLBACK_TIMEOUT_SECS: u64 = 3;  // 3 秒没有回调视为异常
+    const FIRST_CALLBACK_DEADLINE_SECS: u64 = 5;  // 5 秒内必须收到首次回调
 
     let stop_flag_for_watchdog = Arc::clone(&stop_flag);
     let state_for_watchdog = Arc::clone(&state);
@@ -146,17 +147,35 @@ fn run_audio_thread(
             while !stop_flag_for_watchdog.load(Ordering::SeqCst) {
                 thread::sleep(std::time::Duration::from_millis(WATCHDOG_CHECK_INTERVAL_MS));
 
-                if let Some(last_time) = *state_for_watchdog.last_callback_time.lock() {
-                    let elapsed = last_time.elapsed();
-                    if elapsed.as_secs() > CALLBACK_TIMEOUT_SECS {
-                        log::error!(
-                            "[recorder] watchdog: 录音回调已停止 {} 秒，触发错误恢复",
-                            elapsed.as_secs()
-                        );
-                        let _ = runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
-                            format!("录音回调静默停止 {} 秒", elapsed.as_secs())
-                        ));
-                        break;  // 只报告一次
+                let last_callback = *state_for_watchdog.last_callback_time.lock();
+                match last_callback {
+                    Some(last_time) => {
+                        // 已收到首次回调，检查是否停止
+                        let elapsed = last_time.elapsed();
+                        if elapsed.as_secs() > CALLBACK_TIMEOUT_SECS {
+                            log::error!(
+                                "[recorder] watchdog: 录音回调已停止 {} 秒，触发错误恢复",
+                                elapsed.as_secs()
+                            );
+                            let _ = runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
+                                format!("录音回调静默停止 {} 秒", elapsed.as_secs())
+                            ));
+                            break;  // 只报告一次
+                        }
+                    }
+                    None => {
+                        // 尚未收到首次回调，检查是否超过截止时间
+                        let elapsed = state_for_watchdog.stream_start_time.elapsed();
+                        if elapsed.as_secs() > FIRST_CALLBACK_DEADLINE_SECS {
+                            log::error!(
+                                "[recorder] watchdog: {} 秒内未收到首次回调，触发错误恢复",
+                                elapsed.as_secs()
+                            );
+                            let _ = runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
+                                format!("录音启动后 {} 秒内未收到回调", elapsed.as_secs())
+                            ));
+                            break;  // 只报告一次
+                        }
                     }
                 }
             }
@@ -318,6 +337,8 @@ struct StreamState {
     callback_count: AtomicUsize,
     peak_input_rms_milli: AtomicUsize,
     peak_output_rms_milli: AtomicUsize,
+    /// Stream 启动时间（用于检测"首次回调永远不到达"）
+    stream_start_time: std::time::Instant,
     /// 最后一次成功调用 consumer 的时间戳（用于 liveness 检测）
     last_callback_time: Mutex<Option<std::time::Instant>>,
 }
@@ -330,6 +351,7 @@ impl StreamState {
             callback_count: AtomicUsize::new(0),
             peak_input_rms_milli: AtomicUsize::new(0),
             peak_output_rms_milli: AtomicUsize::new(0),
+            stream_start_time: std::time::Instant::now(),
             // 初始化为 None，只有在第一次回调后才开始计时，避免误报慢启动设备
             last_callback_time: Mutex::new(None),
         }
