@@ -353,53 +353,100 @@ type AsrPresetId = typeof ASR_PRESETS[number]['id'];
 function ProvidersSection() {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
+  // `*Provider` 立即跟随 <select> 改动（受控组件必须实时反映用户输入）；
+  // `committed*Provider` 才决定 CredentialField 的 key，仅在后端 active
+  // 切换 + 默认值写完后再 commit。两者拆开是为了同时满足：
+  //   - <select> 立刻显示用户的选择（issue #220 P2：codex 指出受控选不应等 await）
+  //   - CredentialField 不要在后端 active 切完前 remount（issue #219：避免读到旧 entry）
+  // `*SwitchSeq` 是 stale-write 守卫：用户 100ms 内连点两次时，先发的请求晚到不
+  // 会覆盖后发的 commit。
   const [llmProvider, setLlmProvider] = useState<LlmPresetId>('ark');
   const [asrProvider, setAsrProvider] = useState<AsrPresetId>('volcengine');
+  const [committedLlmProvider, setCommittedLlmProvider] = useState<LlmPresetId>('ark');
+  const [committedAsrProvider, setCommittedAsrProvider] = useState<AsrPresetId>('volcengine');
+  const llmSwitchSeqRef = useRef(0);
+  const asrSwitchSeqRef = useRef(0);
   const [llmModelRevision, setLlmModelRevision] = useState(0);
   const [asrModelRevision, setAsrModelRevision] = useState(0);
 
   useEffect(() => {
     if (!prefs) return;
     const knownLlm = LLM_PRESETS.find(x => x.id === prefs.activeLlmProvider);
-    setLlmProvider(knownLlm ? knownLlm.id : 'custom');
+    const llmId = knownLlm ? knownLlm.id : 'custom';
+    setLlmProvider(llmId);
+    setCommittedLlmProvider(llmId);
     const knownAsr = ASR_PRESETS.find(x => x.id === prefs.activeAsrProvider);
-    setAsrProvider(knownAsr ? knownAsr.id : 'volcengine');
+    const asrId = knownAsr ? knownAsr.id : 'volcengine';
+    setAsrProvider(asrId);
+    setCommittedAsrProvider(asrId);
   }, [prefs]);
 
+  // issue #219 / #220 P2：
+  //   1. 立刻 setLlmProvider —— 受控 <select> 必须反映用户最新选择。
+  //   2. 用 seq 守卫每个 await：用户连点两次时旧请求晚到也不会盖掉新选择。
+  //   3. 仅 setCommittedLlmProvider 之后 CredentialField 才 remount 读新 entry，
+  //      此时后端 root.active.llm 已经是 id，lookup_account 落到正确 entry。
+  //   4. endpoint/model 默认值仅在该 provider entry 该字段为空时才填，不覆盖用户自定义。
   const onLlmProviderChange = async (id: LlmPresetId) => {
     setLlmProvider(id);
+    const seq = ++llmSwitchSeqRef.current;
     await setActiveLlmProvider(id);
+    if (seq !== llmSwitchSeqRef.current) return;
     if (prefs) {
       const next = { ...prefs, activeLlmProvider: id };
       await updatePrefs(next);
+      if (seq !== llmSwitchSeqRef.current) return;
     }
     const preset = LLM_PRESETS.find(p => p.id === id);
     if (preset?.baseUrl) {
-      await setCredential('ark.endpoint', preset.baseUrl);
+      const existing = await readCredential('ark.endpoint');
+      if (seq !== llmSwitchSeqRef.current) return;
+      if (!existing) {
+        await setCredential('ark.endpoint', preset.baseUrl);
+        if (seq !== llmSwitchSeqRef.current) return;
+      }
     }
+    setCommittedLlmProvider(id);
   };
 
   const onAsrProviderChange = async (id: AsrPresetId) => {
     setAsrProvider(id);
+    const seq = ++asrSwitchSeqRef.current;
     await setActiveAsrProvider(id);
+    if (seq !== asrSwitchSeqRef.current) return;
     if (prefs) {
       const next = { ...prefs, activeAsrProvider: id };
       await updatePrefs(next);
+      if (seq !== asrSwitchSeqRef.current) return;
     }
-    // 切换到 OpenAI 兼容厂商时同步预填 endpoint + model：每家 base URL / 模型 ID
-    // 都是固定的，不预填用户必然踩坑。volcengine 走另一套凭据，跳过。
+    // OpenAI 兼容厂商首次切换时预填 baseUrl / model 默认值，省得用户必踩
+    // 「跨厂商 model 名根本不一样」的坑；但用户已自定义后就不再覆盖。
+    // volcengine 走另一套凭据，跳过。
     const preset = ASR_PRESETS.find(p => p.id === id);
     if (preset && preset.baseUrl) {
-      await setCredential('asr.endpoint', preset.baseUrl);
+      const existing = await readCredential('asr.endpoint');
+      if (seq !== asrSwitchSeqRef.current) return;
+      if (!existing) {
+        await setCredential('asr.endpoint', preset.baseUrl);
+        if (seq !== asrSwitchSeqRef.current) return;
+      }
     }
     if (preset && preset.model) {
-      await setCredential('asr.model', preset.model);
-      setAsrModelRevision(v => v + 1);
+      const existing = await readCredential('asr.model');
+      if (seq !== asrSwitchSeqRef.current) return;
+      if (!existing) {
+        await setCredential('asr.model', preset.model);
+        if (seq !== asrSwitchSeqRef.current) return;
+      }
     }
+    setCommittedAsrProvider(id);
   };
 
-  const preset = LLM_PRESETS.find(p => p.id === llmProvider) ?? LLM_PRESETS[LLM_PRESETS.length - 1];
-  const asrPreset = ASR_PRESETS.find(p => p.id === asrProvider);
+  // preset 决定 placeholder 与 default —— 必须跟着 committed*Provider 走，
+  // 否则受控 <select> 立刻切到新厂商，但凭据字段还在显示旧 entry，placeholder
+  // 会先于实际数据切换、视觉上对不上。
+  const preset = LLM_PRESETS.find(p => p.id === committedLlmProvider) ?? LLM_PRESETS[LLM_PRESETS.length - 1];
+  const asrPreset = ASR_PRESETS.find(p => p.id === committedAsrProvider);
 
   return (
     <>
@@ -421,12 +468,12 @@ function ProvidersSection() {
             ))}
           </select>
         </SettingRow>
-        <CredentialField key={`${llmProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="ark.api_key" mono mask />
-        <CredentialField key={`${llmProvider}:endpoint`} label={t('settings.providers.baseUrlLabel')} account="ark.endpoint"
+        <CredentialField key={`${committedLlmProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="ark.api_key" mono mask />
+        <CredentialField key={`${committedLlmProvider}:endpoint`} label={t('settings.providers.baseUrlLabel')} account="ark.endpoint"
           placeholder={preset.baseUrl || 'https://your-endpoint/v1'} />
-        <CredentialField key={`${llmProvider}:model:${llmModelRevision}`} label={t('settings.providers.modelLabel')} account="ark.model_id"
+        <CredentialField key={`${committedLlmProvider}:model:${llmModelRevision}`} label={t('settings.providers.modelLabel')} account="ark.model_id"
           placeholder={preset.modelPlaceholder || 'model-name'} mono />
-        <ProviderTools key={llmProvider} kind="llm" modelAccount="ark.model_id" onModelSelected={() => setLlmModelRevision(v => v + 1)} />
+        <ProviderTools key={committedLlmProvider} kind="llm" modelAccount="ark.model_id" onModelSelected={() => setLlmModelRevision(v => v + 1)} />
       </Card>
 
       <Card>
@@ -445,24 +492,24 @@ function ProvidersSection() {
             ))}
           </select>
         </SettingRow>
-        {asrProvider === 'volcengine' ? (
+        {committedAsrProvider === 'volcengine' ? (
           <>
             <CredentialField
-              key={`${asrProvider}:app_key`}
+              key={`${committedAsrProvider}:app_key`}
               label={t('settings.providers.volcengineAppKeyLabel')}
               account="volcengine.app_key"
               mono
               mask
             />
             <CredentialField
-              key={`${asrProvider}:access_key`}
+              key={`${committedAsrProvider}:access_key`}
               label={t('settings.providers.volcengineAccessKeyLabel')}
               account="volcengine.access_key"
               mono
               mask
             />
             <CredentialField
-              key={`${asrProvider}:resource_id`}
+              key={`${committedAsrProvider}:resource_id`}
               label={t('settings.providers.volcengineResourceIdLabel')}
               account="volcengine.resource_id"
               mono
@@ -473,11 +520,11 @@ function ProvidersSection() {
           </>
         ) : (
           <>
-            <CredentialField key={`${asrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" mono mask />
-            <CredentialField key={`${asrProvider}:endpoint`} label={t('settings.providers.baseUrlLabel')} account="asr.endpoint"
+            <CredentialField key={`${committedAsrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" mono mask />
+            <CredentialField key={`${committedAsrProvider}:endpoint`} label={t('settings.providers.baseUrlLabel')} account="asr.endpoint"
               placeholder={asrPreset?.baseUrl || 'https://api.openai.com/v1'}
               defaultValue={asrPreset?.baseUrl || undefined} />
-            <CredentialField key={`${asrProvider}:model:${asrModelRevision}`} label={t('settings.providers.modelLabel')} account="asr.model"
+            <CredentialField key={`${committedAsrProvider}:model:${asrModelRevision}`} label={t('settings.providers.modelLabel')} account="asr.model"
               placeholder={asrPreset?.model || 'whisper-1'} />
             <ProviderTools kind="asr" modelAccount="asr.model" onModelSelected={() => setAsrModelRevision(v => v + 1)} />
           </>
