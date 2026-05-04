@@ -4,7 +4,6 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
 import { Icon } from '../components/Icon';
 import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../components/AutoUpdate';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
@@ -15,6 +14,7 @@ import {
   checkMicrophonePermission,
   getHotkeyStatus,
   getWindowsImeStatus,
+  isTauri,
   openExternal,
   openSystemSettings,
   listProviderModels,
@@ -51,6 +51,17 @@ interface SettingsProps {
 export type SettingsSectionId = 'recording' | 'providers' | 'shortcuts' | 'permissions' | 'language' | 'about';
 
 const SECTION_ORDER: SettingsSectionId[] = ['recording', 'providers', 'shortcuts', 'permissions', 'language', 'about'];
+
+type AutostartPlugin = {
+  enable: () => Promise<void>;
+  disable: () => Promise<void>;
+  isEnabled: () => Promise<boolean>;
+};
+
+async function loadAutostartPlugin(): Promise<AutostartPlugin> {
+  const pluginName = '@tauri-apps/plugin-autostart';
+  return import(/* @vite-ignore */ pluginName) as Promise<AutostartPlugin>;
+}
 
 export function Settings({ embedded = false, initialSection = 'recording' }: SettingsProps) {
   const { t } = useTranslation();
@@ -269,15 +280,20 @@ function AutostartRow() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!isTauri) {
+      setLoaded(true);
+      return;
+    }
     let cancelled = false;
-    isAutostartEnabled()
-      .then(v => {
+    loadAutostartPlugin()
+      .then(plugin => plugin.isEnabled())
+      .then((v: boolean) => {
         if (!cancelled) {
           setEnabled(v);
           setLoaded(true);
         }
       })
-      .catch(err => {
+      .catch((err: unknown) => {
         console.error('[autostart] isEnabled failed', err);
         if (!cancelled) setLoaded(true);
       });
@@ -290,8 +306,10 @@ function AutostartRow() {
     setEnabled(next);
     setError(null);
     try {
-      if (next) await enableAutostart();
-      else await disableAutostart();
+      if (!isTauri) return;
+      const plugin = await loadAutostartPlugin();
+      if (next) await plugin.enable();
+      else await plugin.disable();
     } catch (err) {
       console.error('[autostart] toggle failed', err);
       setEnabled(!next);
