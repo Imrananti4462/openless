@@ -35,6 +35,7 @@ function normalizeHref(href: string | null | undefined): string | null {
 }
 
 const QA_MARKDOWN_RENDERER = new marked.Renderer();
+QA_MARKDOWN_RENDERER.html = (html: string) => escapeHtml(html);
 QA_MARKDOWN_RENDERER.link = (href: string | null, title: string | null, text: string) => {
   const safeHref = normalizeHref(decodeHtmlEntities(href ?? ''));
   if (!safeHref) return `<span>${text}</span>`;
@@ -54,9 +55,8 @@ export function renderQaPlainText(raw: string): string {
 }
 
 export function renderQaMarkdown(markdown: string): string {
-  // 禁用 markdown 中 raw HTML：统一转义后再走 marked，仅保留安全 markdown 子集。
-  const escaped = escapeHtml(markdown);
-  return marked.parse(escaped, {
+  // 保留 markdown 语义（尤其代码块），但把 raw HTML token 转义为纯文本，避免注入。
+  return marked.parse(markdown, {
     async: false,
     gfm: true,
     breaks: true,

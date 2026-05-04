@@ -28,3 +28,7 @@ assertIncludes(goodMarkdown, 'href="https://example.com"', 'safe link should ren
 
 const safeQueryLink = renderQaMarkdown('[ok](https://example.com?a=1&b=2)');
 assertIncludes(safeQueryLink, 'href="https://example.com?a=1&amp;b=2"', 'safe query link should keep a single escaped ampersand');
+
+const codeSnippet = renderQaMarkdown('`<div class=\"x\">`');
+assertIncludes(codeSnippet, '&lt;div class=&quot;x&quot;&gt;', 'inline code should stay single-escaped');
+assertNotIncludes(codeSnippet, '&amp;lt;', 'inline code should not be double-escaped');
