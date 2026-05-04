@@ -202,6 +202,8 @@ pub fn run() {
             commands::add_vocab,
             commands::remove_vocab,
             commands::set_vocab_enabled,
+            commands::list_vocab_presets,
+            commands::save_vocab_presets,
             commands::start_dictation,
             commands::stop_dictation,
             commands::cancel_dictation,
