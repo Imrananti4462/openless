@@ -226,16 +226,29 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set +e
-          # 顺序很关键：NSIS 必须先跑、产出 *_x64-setup.exe(.sig) 给 updater 用。
-          # Tauri 的 "all" 默认按字母序 msi→nsis，MSI 一旦 ICE80 挂掉就 short-circuit
-          # 整个 bundle 流程，NSIS 完全没机会执行。显式 --bundles nsis,msi 强制顺序。
+          # 拆两轮跑：Tauri 的签名 / updater artifact 阶段是 post-bundle 钩子，
+          # 任意 bundler 失败会让 *所有* bundle 的 .sig 跳过。MSI 必踩 ICE80，
+          # 所以单一 `tauri build` 永远拿不到 NSIS 的 .exe.sig。
+          # Pass 1：NSIS 独立跑——必须成功，产出 *_x64-setup.exe(.sig) 给 updater。
+          # Pass 2：MSI 独立跑——允许失败，Repair 步骤兜底 light.exe 重链。
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            npm run tauri -- build --bundles nsis,msi --config '{"bundle":{"createUpdaterArtifacts":true}}'
+            npm run tauri -- build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}'
+            nsis_exit=$?
+            npm run tauri -- build --bundles msi --config '{"bundle":{"createUpdaterArtifacts":true}}'
+            msi_exit=$?
           else
-            npm run tauri -- build --bundles nsis,msi
+            npm run tauri -- build --bundles nsis
+            nsis_exit=$?
+            npm run tauri -- build --bundles msi
+            msi_exit=$?
           fi
-          echo "TAURI_BUILD_EXIT=$?" >> "$GITHUB_ENV"
-          # 不直接退出失败：下一步 Repair 还有兜底机会（NSIS 已先于 MSI 写盘）。
+          echo "TAURI_BUILD_EXIT=$msi_exit" >> "$GITHUB_ENV"
+          # NSIS 是 updater 的硬依赖，挂了就直接 fail step。
+          if [ "$nsis_exit" -ne 0 ]; then
+            echo "::error::NSIS bundle failed (exit $nsis_exit) — updater artifact unavailable."
+            exit 1
+          fi
+          # MSI 失败不挡——下一步 Repair 用 light.exe 重链（带 -sice:ICE80）。
           exit 0
 
       # ── 如果 tauri 在 wix link 阶段失败（candle 出了 wixobj，但 light 因 cwd
