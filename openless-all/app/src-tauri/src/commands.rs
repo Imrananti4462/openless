@@ -275,12 +275,15 @@ async fn validate_asr_transcription(config: &ProviderConfig, model: &str) -> Res
             return Err("providerResponseTooLarge".to_string());
         }
     }
-    let body = response
-        .bytes()
-        .await
-        .map_err(|_| "providerReadResponseFailed".to_string())?;
-    if body.len() > MAX_ASR_VALIDATE_BODY_BYTES {
-        return Err("providerResponseTooLarge".to_string());
+    use futures_util::StreamExt;
+    let mut body = Vec::<u8>::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| "providerReadResponseFailed".to_string())?;
+        if body.len().saturating_add(chunk.len()) > MAX_ASR_VALIDATE_BODY_BYTES {
+            return Err("providerResponseTooLarge".to_string());
+        }
+        body.extend_from_slice(&chunk);
     }
     let json: Value = serde_json::from_slice(&body).map_err(|_| "asrInvalidJson".to_string())?;
     if !json.is_object() || json.get("text").is_none() {
@@ -302,6 +305,9 @@ fn asr_transcriptions_url(base_url: &str) -> Result<String, String> {
     }
     if trimmed.ends_with("/audio") {
         return Ok(format!("{trimmed}/transcriptions"));
+    }
+    if let Some(prefix) = trimmed.strip_suffix("/chat/completions") {
+        return Ok(format!("{prefix}/audio/transcriptions"));
     }
     Ok(format!("{trimmed}/audio/transcriptions"))
 }
@@ -735,6 +741,10 @@ mod tests {
     fn asr_transcriptions_url_accepts_base_or_transcriptions_endpoint() {
         assert_eq!(
             asr_transcriptions_url("https://api.openai.com/v1").unwrap(),
+            "https://api.openai.com/v1/audio/transcriptions"
+        );
+        assert_eq!(
+            asr_transcriptions_url("https://api.openai.com/v1/chat/completions").unwrap(),
             "https://api.openai.com/v1/audio/transcriptions"
         );
         assert_eq!(
