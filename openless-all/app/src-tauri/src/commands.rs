@@ -13,7 +13,7 @@ use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVaul
 use crate::polish::{LLMError, OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
 use crate::types::{
     CredentialsStatus, DictationSession, DictionaryEntry, HotkeyCapability, HotkeyStatus,
-    PolishMode, QaHotkeyBinding, UserPreferences,
+    PolishMode, QaHotkeyBinding, UserPreferences, WindowsImeStatus,
 };
 
 type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
@@ -88,6 +88,11 @@ pub fn get_hotkey_status(coord: CoordinatorState<'_>) -> HotkeyStatus {
 #[tauri::command]
 pub fn get_hotkey_capability(coord: CoordinatorState<'_>) -> HotkeyCapability {
     coord.hotkey_capability()
+}
+
+#[tauri::command]
+pub fn get_windows_ime_status() -> WindowsImeStatus {
+    crate::windows_ime_profile::get_windows_ime_status()
 }
 
 #[tauri::command]

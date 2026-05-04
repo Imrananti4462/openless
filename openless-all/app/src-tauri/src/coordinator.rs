@@ -33,6 +33,10 @@ use crate::types::{
     CapsulePayload, CapsuleState, DictationSession, HotkeyCapability, HotkeyMode, HotkeyStatus,
     HotkeyStatusState, InsertStatus, PolishMode,
 };
+#[cfg(target_os = "windows")]
+use crate::windows_ime_ipc::ImeSubmitTarget;
+#[cfg(target_os = "windows")]
+use crate::windows_ime_session::{PreparedWindowsImeSession, WindowsImeSessionController};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionPhase {
@@ -50,6 +54,24 @@ enum SessionPhase {
 enum ActiveAsr {
     Volcengine(Arc<VolcengineStreamingASR>),
     Whisper(Arc<WhisperBatchASR>),
+}
+
+struct SessionResource<T> {
+    session_id: u64,
+    resource: T,
+}
+
+impl<T> SessionResource<T> {
+    fn new(session_id: u64, resource: T) -> Self {
+        Self {
+            session_id,
+            resource,
+        }
+    }
+
+    fn into_inner(self) -> T {
+        self.resource
+    }
 }
 
 struct SessionState {
@@ -95,9 +117,13 @@ struct Inner {
     prefs: PreferencesStore,
     vocab: DictionaryStore,
     inserter: TextInserter,
+    #[cfg(target_os = "windows")]
+    windows_ime: WindowsImeSessionController,
+    #[cfg(target_os = "windows")]
+    prepared_windows_ime_session: Arc<Mutex<Vec<PreparedWindowsImeSessionSlot>>>,
     state: Mutex<SessionState>,
-    asr: Mutex<Option<ActiveAsr>>,
-    recorder: Mutex<Option<Recorder>>,
+    asr: Mutex<Option<SessionResource<ActiveAsr>>>,
+    recorder: Mutex<Option<SessionResource<Recorder>>>,
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
     hotkey_trigger_held: AtomicBool,
@@ -163,6 +189,13 @@ impl Default for QaSessionState {
     }
 }
 
+#[cfg(target_os = "windows")]
+#[derive(Debug)]
+struct PreparedWindowsImeSessionSlot {
+    session_id: u64,
+    prepared: PreparedWindowsImeSession,
+}
+
 impl Coordinator {
     pub fn new() -> Self {
         let history = HistoryStore::new().unwrap_or_else(|e| {
@@ -179,6 +212,10 @@ impl Coordinator {
                 prefs,
                 vocab,
                 inserter: TextInserter::new(),
+                #[cfg(target_os = "windows")]
+                windows_ime: WindowsImeSessionController::new(),
+                #[cfg(target_os = "windows")]
+                prepared_windows_ime_session: Arc::new(Mutex::new(Vec::new())),
                 state: Mutex::new(SessionState::default()),
                 asr: Mutex::new(None),
                 recorder: Mutex::new(None),
@@ -736,15 +773,72 @@ fn request_stop_during_starting(inner: &Arc<Inner>, reason: &str) {
     stop_recorder_if_pending_start_stop(inner);
 }
 
+fn take_session_resource<T>(slot: &mut Option<SessionResource<T>>, session_id: u64) -> Option<T> {
+    if slot
+        .as_ref()
+        .map(|resource| resource.session_id == session_id)
+        .unwrap_or(false)
+    {
+        slot.take().map(SessionResource::into_inner)
+    } else {
+        None
+    }
+}
+
+fn store_asr_for_session(inner: &Arc<Inner>, session_id: u64, asr: ActiveAsr) {
+    *inner.asr.lock() = Some(SessionResource::new(session_id, asr));
+}
+
+fn take_asr_for_session(inner: &Arc<Inner>, session_id: u64) -> Option<ActiveAsr> {
+    let mut slot = inner.asr.lock();
+    take_session_resource(&mut slot, session_id)
+}
+
+fn cancel_active_asr(asr: ActiveAsr) {
+    match asr {
+        ActiveAsr::Volcengine(v) => v.cancel(),
+        ActiveAsr::Whisper(w) => w.cancel(),
+    }
+}
+
+fn cancel_asr_for_session(inner: &Arc<Inner>, session_id: u64) {
+    if let Some(asr) = take_asr_for_session(inner, session_id) {
+        cancel_active_asr(asr);
+    }
+}
+
+fn store_recorder_for_session(inner: &Arc<Inner>, session_id: u64, recorder: Recorder) {
+    *inner.recorder.lock() = Some(SessionResource::new(session_id, recorder));
+}
+
+fn take_recorder_for_session(inner: &Arc<Inner>, session_id: u64) -> Option<Recorder> {
+    let mut slot = inner.recorder.lock();
+    take_session_resource(&mut slot, session_id)
+}
+
+fn stop_recorder_for_session(inner: &Arc<Inner>, session_id: u64) {
+    if let Some(recorder) = take_recorder_for_session(inner, session_id) {
+        recorder.stop();
+    }
+}
+
+fn discard_startup_resources_for_session(inner: &Arc<Inner>, session_id: u64) {
+    stop_recorder_for_session(inner, session_id);
+    cancel_asr_for_session(inner, session_id);
+}
+
 fn stop_recorder_if_pending_start_stop(inner: &Arc<Inner>) {
-    let should_stop = {
+    let (should_stop, session_id) = {
         let state = inner.state.lock();
-        state.phase == SessionPhase::Starting && state.pending_stop
+        (
+            state.phase == SessionPhase::Starting && state.pending_stop,
+            state.session_id,
+        )
     };
     if !should_stop {
         return;
     }
-    if let Some(rec) = inner.recorder.lock().take() {
+    if let Some(rec) = take_recorder_for_session(inner, session_id) {
         rec.stop();
         let elapsed = inner.state.lock().started_at.elapsed().as_millis() as u64;
         emit_capsule(inner, CapsuleState::Transcribing, 0.0, elapsed, None, None);
@@ -840,7 +934,7 @@ fn window_key_matches_trigger(trigger: crate::types::HotkeyTrigger, key: &str, c
 // ─────────────────────────── session lifecycle ───────────────────────────
 
 async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
-    {
+    let current_session_id = {
         let mut state = inner.state.lock();
         if state.phase != SessionPhase::Idle {
             return Ok(());
@@ -858,6 +952,13 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         if let Some(label) = state.front_app.as_deref() {
             log::info!("[coord] front_app captured: {label}");
         }
+        state.session_id
+    };
+    #[cfg(target_os = "windows")]
+    {
+        let prepared = inner.windows_ime.prepare_session();
+        let mut slots = inner.prepared_windows_ime_session.lock();
+        store_prepared_windows_ime_session(&mut slots, current_session_id, prepared);
     }
     // 翻译模式标志重置；hotkey 监听器在 Shift down 时再 set true。
     inner
@@ -882,6 +983,7 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
             Some(message.clone()),
             None,
         );
+        restore_prepared_windows_ime_session(inner, current_session_id);
         inner.state.lock().phase = SessionPhase::Idle;
         return Err(message);
     }
@@ -896,6 +998,7 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
             Some(message.clone()),
             None,
         );
+        restore_prepared_windows_ime_session(inner, current_session_id);
         inner.state.lock().phase = SessionPhase::Idle;
         schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
         return Err(message);
@@ -908,33 +1011,49 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
     if is_whisper_compatible_provider(&active_asr) {
         let (api_key, base_url, model) = read_whisper_credentials();
         let whisper = Arc::new(WhisperBatchASR::new(api_key, base_url, model));
-        *inner.asr.lock() = Some(ActiveAsr::Whisper(Arc::clone(&whisper)));
+        store_asr_for_session(
+            inner,
+            current_session_id,
+            ActiveAsr::Whisper(Arc::clone(&whisper)),
+        );
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = whisper;
-        start_recorder_and_enter_listening(inner, &active_asr, consumer).await?;
+        start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer)
+            .await?;
     } else {
         let hotwords = enabled_hotwords(inner);
         let creds = read_volc_credentials();
         let asr = Arc::new(VolcengineStreamingASR::new(creds, hotwords));
         let bridge = Arc::new(DeferredAsrBridge::new());
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = bridge.clone();
-        *inner.asr.lock() = Some(ActiveAsr::Volcengine(Arc::clone(&asr)));
-        start_recorder_for_starting(inner, &active_asr, consumer)?;
+        store_asr_for_session(
+            inner,
+            current_session_id,
+            ActiveAsr::Volcengine(Arc::clone(&asr)),
+        );
+        start_recorder_for_starting(inner, current_session_id, &active_asr, consumer)?;
 
         if let Err(e) = asr.open_session().await {
             log::error!("[coord] open ASR session failed: {e}");
-            if let Some(rec) = inner.recorder.lock().take() {
-                rec.stop();
-            }
-            if let Some(asr) = inner.asr.lock().take() {
-                match asr {
-                    ActiveAsr::Volcengine(v) => v.cancel(),
-                    ActiveAsr::Whisper(w) => w.cancel(),
+            match startup_race_status_for_starting(inner, current_session_id) {
+                StartupRaceStatus::StaleContinuation => {
+                    log::info!(
+                        "[coord] stale ASR open_session error from session {current_session_id} — ignoring"
+                    );
+                    asr.cancel();
+                    discard_startup_resources_for_session(inner, current_session_id);
+                    restore_prepared_windows_ime_session(inner, current_session_id);
+                    return Ok(());
                 }
+                StartupRaceStatus::CancelRaced => {
+                    asr.cancel();
+                    discard_startup_resources_for_session(inner, current_session_id);
+                    restore_prepared_windows_ime_session(inner, current_session_id);
+                    set_phase_idle_if_session_matches(inner, current_session_id);
+                    return Ok(());
+                }
+                StartupRaceStatus::ActiveStarting => {}
             }
-            if cancel_raced_during_starting(inner) {
-                inner.state.lock().phase = SessionPhase::Idle;
-                return Ok(());
-            }
+            discard_startup_resources_for_session(inner, current_session_id);
             emit_capsule(
                 inner,
                 CapsuleState::Error,
@@ -943,26 +1062,38 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
                 Some(format!("ASR 连接失败: {e}")),
                 None,
             );
-            inner.state.lock().phase = SessionPhase::Idle;
+            restore_prepared_windows_ime_session(inner, current_session_id);
+            set_phase_idle_if_session_matches(inner, current_session_id);
             schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
             return Err(e.to_string());
         }
         // open_session.await 期间用户可能按了 Esc / 改变心意。如果 cancel_session
         // 已触发（cancelled=true 或 phase 被改回 Idle），别再装 ASR，直接善后。
         // audit HIGH #1。
-        if cancel_raced_during_starting(inner) {
-            log::info!("[coord] cancel raced during ASR open_session — aborting begin");
-            asr.cancel();
-            if let Some(rec) = inner.recorder.lock().take() {
-                rec.stop();
+        match startup_race_status_for_starting(inner, current_session_id) {
+            StartupRaceStatus::ActiveStarting => {}
+            StartupRaceStatus::CancelRaced => {
+                log::info!("[coord] cancel raced during ASR open_session — aborting begin");
+                asr.cancel();
+                discard_startup_resources_for_session(inner, current_session_id);
+                restore_prepared_windows_ime_session(inner, current_session_id);
+                set_phase_idle_if_session_matches(inner, current_session_id);
+                return Ok(());
             }
-            inner.state.lock().phase = SessionPhase::Idle;
-            return Ok(());
+            StartupRaceStatus::StaleContinuation => {
+                log::info!(
+                    "[coord] stale ASR open_session continuation from session {current_session_id} — ignoring"
+                );
+                asr.cancel();
+                discard_startup_resources_for_session(inner, current_session_id);
+                restore_prepared_windows_ime_session(inner, current_session_id);
+                return Ok(());
+            }
         }
         let target: Arc<dyn crate::asr::AudioConsumer> = asr;
         let flushed_bytes = bridge.attach(target);
         log::info!("[coord] ASR connected; flushed {flushed_bytes} deferred audio bytes");
-        finish_starting_session(inner).await;
+        finish_starting_session(inner, current_session_id).await;
     }
 
     Ok(())
@@ -970,6 +1101,7 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
 
 fn start_recorder_for_starting(
     inner: &Arc<Inner>,
+    session_id: u64,
     active_asr: &str,
     consumer: Arc<dyn crate::recorder::AudioConsumer>,
 ) -> Result<(), String> {
@@ -1012,19 +1144,14 @@ fn start_recorder_for_starting(
 
     match Recorder::start(consumer, level_handler) {
         Ok((rec, runtime_errors)) => {
-            *inner.recorder.lock() = Some(rec);
+            store_recorder_for_session(inner, session_id, rec);
             spawn_recorder_error_monitor(inner, runtime_errors);
             stop_recorder_if_pending_start_stop(inner);
             log::info!("[coord] recorder started (asr={active_asr}, phase=Starting)");
         }
         Err(e) => {
             log::error!("[coord] recorder start failed: {e}");
-            if let Some(asr) = inner.asr.lock().take() {
-                match asr {
-                    ActiveAsr::Volcengine(v) => v.cancel(),
-                    ActiveAsr::Whisper(w) => w.cancel(),
-                }
-            }
+            cancel_asr_for_session(inner, session_id);
             emit_capsule(
                 inner,
                 CapsuleState::Error,
@@ -1033,6 +1160,7 @@ fn start_recorder_for_starting(
                 Some(format!("录音启动失败: {e}")),
                 None,
             );
+            restore_prepared_windows_ime_session(inner, session_id);
             inner.state.lock().phase = SessionPhase::Idle;
             schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
             return Err(e.to_string());
@@ -1096,59 +1224,78 @@ fn spawn_qa_recorder_error_monitor(inner: &Arc<Inner>, rx: mpsc::Receiver<Record
 }
 
 fn abort_recording_with_error(inner: &Arc<Inner>, message: String) {
-    let elapsed = {
+    let Some(abort) = ({
         let mut state = inner.state.lock();
-        if state.cancelled
-            || !matches!(
-                state.phase,
-                SessionPhase::Starting | SessionPhase::Listening
-            )
-        {
-            return;
-        }
-        state.cancelled = true;
-        state.phase = SessionPhase::Idle;
-        state.started_at.elapsed().as_millis() as u64
+        begin_recording_abort_before_restore(&mut state)
+    }) else {
+        return;
     };
 
-    if let Some(rec) = inner.recorder.lock().take() {
-        rec.stop();
-    }
-    if let Some(asr) = inner.asr.lock().take() {
-        match asr {
-            ActiveAsr::Volcengine(v) => v.cancel(),
-            ActiveAsr::Whisper(w) => w.cancel(),
-        }
+    discard_startup_resources_for_session(inner, abort.session_id);
+    restore_prepared_windows_ime_session(inner, abort.session_id);
+    {
+        let mut state = inner.state.lock();
+        publish_abort_idle_after_restore(&mut state, abort.session_id);
     }
 
     emit_capsule(
         inner,
         CapsuleState::Error,
         0.0,
-        elapsed,
+        abort.elapsed,
         Some(message),
         None,
     );
     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
 }
 
+struct RecordingAbort {
+    elapsed: u64,
+    session_id: u64,
+}
+
+fn begin_recording_abort_before_restore(state: &mut SessionState) -> Option<RecordingAbort> {
+    if state.cancelled
+        || !matches!(
+            state.phase,
+            SessionPhase::Starting | SessionPhase::Listening
+        )
+    {
+        return None;
+    }
+    state.cancelled = true;
+    Some(RecordingAbort {
+        elapsed: state.started_at.elapsed().as_millis() as u64,
+        session_id: state.session_id,
+    })
+}
+
+fn publish_abort_idle_after_restore(state: &mut SessionState, session_id: u64) {
+    if state.session_id == session_id {
+        state.phase = SessionPhase::Idle;
+    }
+}
+
 async fn start_recorder_and_enter_listening(
     inner: &Arc<Inner>,
+    session_id: u64,
     active_asr: &str,
     consumer: Arc<dyn crate::recorder::AudioConsumer>,
 ) -> Result<(), String> {
-    start_recorder_for_starting(inner, active_asr, consumer)?;
-    finish_starting_session(inner).await;
+    start_recorder_for_starting(inner, session_id, active_asr, consumer)?;
+    finish_starting_session(inner, session_id).await;
     Ok(())
 }
 
-async fn finish_starting_session(inner: &Arc<Inner>) {
+async fn finish_starting_session(inner: &Arc<Inner>, session_id: u64) {
     // audit HIGH #1：转 Listening 之前在同一 lock 内检查 cancel race。
     // 之前是无条件 phase=Listening，会把 cancel_session 在 await 期间设的 Idle
     // 反向覆盖回 Listening → 用户的 cancel 边沿被吞掉。
     let outcome = {
         let mut state = inner.state.lock();
-        if state.cancelled || state.phase != SessionPhase::Starting {
+        if state.session_id != session_id {
+            BeginOutcome::StaleContinuation
+        } else if state.cancelled || state.phase != SessionPhase::Starting {
             BeginOutcome::CancelRaced
         } else {
             state.phase = SessionPhase::Listening;
@@ -1161,18 +1308,18 @@ async fn finish_starting_session(inner: &Arc<Inner>) {
         }
     };
     match outcome {
+        BeginOutcome::StaleContinuation => {
+            log::info!(
+                "[coord] stale recorder/ASR startup continuation from session {session_id} — ignoring"
+            );
+            discard_startup_resources_for_session(inner, session_id);
+            restore_prepared_windows_ime_session(inner, session_id);
+        }
         BeginOutcome::CancelRaced => {
             log::info!("[coord] cancel raced during recorder/ASR startup — aborting begin");
-            if let Some(rec) = inner.recorder.lock().take() {
-                rec.stop();
-            }
-            if let Some(asr) = inner.asr.lock().take() {
-                match asr {
-                    ActiveAsr::Volcengine(v) => v.cancel(),
-                    ActiveAsr::Whisper(w) => w.cancel(),
-                }
-            }
-            inner.state.lock().phase = SessionPhase::Idle;
+            discard_startup_resources_for_session(inner, session_id);
+            restore_prepared_windows_ime_session(inner, session_id);
+            set_phase_idle_if_session_matches(inner, session_id);
         }
         BeginOutcome::Started | BeginOutcome::PendingStop => {
             log::info!("[coord] session started");
@@ -1185,25 +1332,27 @@ async fn finish_starting_session(inner: &Arc<Inner>) {
 }
 
 async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
-    {
+    let current_session_id = {
         let mut state = inner.state.lock();
         if state.phase != SessionPhase::Listening {
             return Ok(());
         }
         state.phase = SessionPhase::Processing;
-    }
+        state.session_id
+    };
 
     let elapsed = inner.state.lock().started_at.elapsed().as_millis() as u64;
     emit_capsule(inner, CapsuleState::Transcribing, 0.0, elapsed, None, None);
 
-    if let Some(rec) = inner.recorder.lock().take() {
+    if let Some(rec) = take_recorder_for_session(inner, current_session_id) {
         rec.stop();
     }
 
-    let asr_opt = inner.asr.lock().take();
+    let asr_opt = take_asr_for_session(inner, current_session_id);
     let asr = match asr_opt {
         Some(a) => a,
         None => {
+            restore_prepared_windows_ime_session(inner, current_session_id);
             inner.state.lock().phase = SessionPhase::Idle;
             return Ok(());
         }
@@ -1226,6 +1375,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         Some(format!("识别失败: {e}")),
                         None,
                     );
+                    restore_prepared_windows_ime_session(inner, current_session_id);
                     inner.state.lock().phase = SessionPhase::Idle;
                     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
                     return Err(e.to_string());
@@ -1244,6 +1394,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     Some(format!("识别失败: {e}")),
                     None,
                 );
+                restore_prepared_windows_ime_session(inner, current_session_id);
                 inner.state.lock().phase = SessionPhase::Idle;
                 schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
                 return Err(e.to_string());
@@ -1255,6 +1406,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     // 优先级高于 empty 检查 — 用户取消 → 静默丢弃，不写失败历史也不弹错误胶囊。
     if inner.state.lock().cancelled {
         log::info!("[coord] cancel detected after ASR — discarding transcript");
+        restore_prepared_windows_ime_session(inner, current_session_id);
         inner.state.lock().phase = SessionPhase::Idle;
         return Ok(());
     }
@@ -1299,6 +1451,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             Some("ASR returned empty transcript".to_string()),
             None,
         );
+        restore_prepared_windows_ime_session(inner, current_session_id);
         inner.state.lock().phase = SessionPhase::Idle;
         schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
         return Err("ASR returned empty transcript".to_string());
@@ -1358,20 +1511,44 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             "[coord] cancel detected before insert — discarding output (chars={})",
             polished.chars().count()
         );
+        restore_prepared_windows_ime_session(inner, current_session_id);
         return Ok(());
     }
 
     let focus_target = inner.state.lock().focus_target;
     let focus_ready_for_paste = restore_focus_target_if_possible(focus_target);
-    let restore_clipboard = inner.prefs.get().restore_clipboard_after_paste;
+    let prefs = inner.prefs.get();
+    let restore_clipboard = prefs.restore_clipboard_after_paste;
+    let allow_non_tsf_insertion_fallback = prefs.allow_non_tsf_insertion_fallback;
     let status = if focus_ready_for_paste {
-        inner.inserter.insert(&polished, restore_clipboard)
+        #[cfg(target_os = "windows")]
+        {
+            let ime_target = capture_ime_submit_target();
+            insert_with_windows_ime_first(
+                inner,
+                current_session_id,
+                &polished,
+                restore_clipboard,
+                allow_non_tsf_insertion_fallback,
+                ime_target,
+            )
+            .await
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            inner.inserter.insert(&polished, restore_clipboard)
+        }
     } else {
         log::warn!(
             "[coord] original insertion target is not foreground; copied output without paste"
         );
-        inner.inserter.copy_fallback(&polished)
+        if allow_non_tsf_insertion_fallback {
+            inner.inserter.copy_fallback(&polished)
+        } else {
+            InsertStatus::Failed
+        }
     };
+    restore_prepared_windows_ime_session(inner, current_session_id);
     let inserted_chars = polished.chars().count() as u32;
 
     // 累计每条 enabled 词条在最终文本中的命中次数。
@@ -1393,7 +1570,14 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     // polish 失败时在 history 里标记 polishFailed，让用户能在历史详情看到为什么这次输出
     // 不是预期的 mode 风格。即使失败也不丢词 — final_text 仍是原文（保留"用户的话不丢"语义）。
-    let error_code = polish_error.as_ref().map(|_| "polishFailed".to_string());
+    let error_code = dictation_error_code(
+        status,
+        polish_error.is_some(),
+        focus_ready_for_paste,
+        allow_non_tsf_insertion_fallback,
+    )
+    .map(str::to_string);
+    let tsf_required_insert_failed = error_code.as_deref() == Some("windowsImeTsfRequired");
 
     let session = DictationSession {
         id: Uuid::new_v4().to_string(),
@@ -1414,7 +1598,9 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         log::error!("[coord] history append failed: {e}");
     }
 
-    let done_message = if polish_error.is_some() {
+    let done_message = if tsf_required_insert_failed {
+        Some("TSF 未上屏，已禁止非 TSF 兜底".to_string())
+    } else if polish_error.is_some() {
         // polish 失败优先告知用户，即使 insert 成功也要让用户知道这版是原文
         Some("润色失败，已插入原文".to_string())
     } else {
@@ -1449,31 +1635,50 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     Ok(())
 }
 
-fn cancel_session(inner: &Arc<Inner>) {
-    let phase = inner.state.lock().phase;
-    if phase == SessionPhase::Idle {
-        return;
+fn dictation_error_code(
+    status: InsertStatus,
+    polish_failed: bool,
+    focus_ready_for_paste: bool,
+    allow_non_tsf_insertion_fallback: bool,
+) -> Option<&'static str> {
+    if !focus_ready_for_paste && status == InsertStatus::Failed {
+        Some("focusRestoreFailed")
+    } else if cfg!(target_os = "windows")
+        && focus_ready_for_paste
+        && !allow_non_tsf_insertion_fallback
+        && status == InsertStatus::Failed
+    {
+        Some("windowsImeTsfRequired")
+    } else if polish_failed {
+        Some("polishFailed")
+    } else {
+        None
     }
-    // Inserting 阶段已经过了最后一次 cancel 检查 + 锁内转换，inserter.insert 即将
-    // 或正在执行 → Cmd+V 已发出无法撤销。这里硬设 cancelled=true 只会让 UI 显示
-    // "已取消" 但文本仍被插入，与用户预期相反。直接拒绝，让本次 session 走完。
-    if phase == SessionPhase::Inserting {
-        log::info!("[coord] cancel ignored — already in Inserting phase, can't undo paste");
-        return;
-    }
-    // Processing 阶段 cancel 不能直接干掉 in-flight polish task（已经 await 了），
-    // 但可以打 cancelled 标记，让 end_session 在插入前检查并丢弃结果。
-    inner.state.lock().cancelled = true;
+}
 
-    if let Some(rec) = inner.recorder.lock().take() {
-        rec.stop();
-    }
-    if let Some(asr) = inner.asr.lock().take() {
-        match asr {
-            ActiveAsr::Volcengine(v) => v.cancel(),
-            ActiveAsr::Whisper(w) => w.cancel(),
+fn cancel_session(inner: &Arc<Inner>) {
+    let (phase, session_id) = {
+        let mut state = inner.state.lock();
+        let phase = state.phase;
+        if phase == SessionPhase::Idle {
+            return;
         }
-    }
+        // Inserting 阶段已经过了最后一次 cancel 检查 + 锁内转换，inserter.insert 即将
+        // 或正在执行 → Cmd+V 已发出无法撤销。这里硬设 cancelled=true 只会让 UI 显示
+        // "已取消" 但文本仍被插入，与用户预期相反。直接拒绝，让本次 session 走完。
+        if phase == SessionPhase::Inserting {
+            log::info!("[coord] cancel ignored — already in Inserting phase, can't undo paste");
+            return;
+        }
+        // Processing 阶段 cancel 不能直接干掉 in-flight polish task（已经 await 了），
+        // 但可以打 cancelled 标记，让 end_session 在插入前检查并丢弃结果。
+        state.cancelled = true;
+        (phase, state.session_id)
+    };
+
+    stop_recorder_for_session(inner, session_id);
+    cancel_asr_for_session(inner, session_id);
+    restore_prepared_windows_ime_session(inner, session_id);
     // Processing 阶段保持 phase=Processing 让 end_session 自己走完检查 + 收尾；
     // 其他阶段直接转 Idle。
     if phase != SessionPhase::Processing {
@@ -1484,6 +1689,138 @@ fn cancel_session(inner: &Arc<Inner>) {
     emit_capsule(inner, CapsuleState::Cancelled, 0.0, 0, None, None);
     log::info!("[coord] session cancelled (was {phase:?})");
     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+}
+
+#[cfg(target_os = "windows")]
+fn store_prepared_windows_ime_session(
+    slots: &mut Vec<PreparedWindowsImeSessionSlot>,
+    session_id: u64,
+    prepared: PreparedWindowsImeSession,
+) {
+    slots.retain(|slot| slot.session_id != session_id);
+    slots.push(PreparedWindowsImeSessionSlot {
+        session_id,
+        prepared,
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn take_matching_prepared_windows_ime_session(
+    slots: &mut Vec<PreparedWindowsImeSessionSlot>,
+    session_id: u64,
+) -> Option<PreparedWindowsImeSession> {
+    let index = slots
+        .iter()
+        .position(|slot| slot.session_id == session_id)?;
+    Some(slots.remove(index).prepared)
+}
+
+#[cfg(target_os = "windows")]
+fn take_current_prepared_windows_ime_session_for_restore(
+    slots: &mut Vec<PreparedWindowsImeSessionSlot>,
+    session_id: u64,
+    current_session_id: u64,
+) -> Option<PreparedWindowsImeSession> {
+    let prepared = take_matching_prepared_windows_ime_session(slots, session_id)?;
+    if current_session_id == session_id {
+        Some(prepared)
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn restore_prepared_windows_ime_session(inner: &Arc<Inner>, session_id: u64) {
+    let state = inner.state.lock();
+    let prepared = {
+        let mut slot = inner.prepared_windows_ime_session.lock();
+        take_current_prepared_windows_ime_session_for_restore(
+            &mut slot,
+            session_id,
+            state.session_id,
+        )
+    };
+    if let Some(prepared) = prepared {
+        inner.windows_ime.restore_session(prepared);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn restore_prepared_windows_ime_session(_inner: &Arc<Inner>, _session_id: u64) {}
+
+#[cfg(target_os = "windows")]
+async fn insert_with_windows_ime_first(
+    inner: &Arc<Inner>,
+    session_id: u64,
+    polished: &str,
+    restore_clipboard: bool,
+    allow_non_tsf_insertion_fallback: bool,
+    ime_target: Option<ImeSubmitTarget>,
+) -> InsertStatus {
+    let prepared = {
+        let mut slot = inner.prepared_windows_ime_session.lock();
+        take_matching_prepared_windows_ime_session(&mut slot, session_id)
+    };
+    let Some(prepared) = prepared else {
+        log::warn!("[windows-ime] no prepared TSF session for this dictation");
+        if should_try_non_tsf_insertion_fallback(
+            allow_non_tsf_insertion_fallback,
+            InsertStatus::Failed,
+        ) {
+            return insert_via_non_tsf_fallback(inner, polished, restore_clipboard);
+        }
+        log::warn!("[windows-ime] non-TSF insertion fallback is disabled; failing insert");
+        return InsertStatus::Failed;
+    };
+
+    let request = crate::windows_ime_ipc::ImeSubmitRequest {
+        session_id: Uuid::new_v4().to_string(),
+        text: polished.to_string(),
+        created_at: Utc::now().to_rfc3339(),
+        target: ime_target,
+    };
+
+    let ime_status = match inner.windows_ime.submit_prepared(&prepared, request).await {
+        Ok(status) => status,
+        Err(error) => {
+            log::warn!("[windows-ime] TSF submit failed: {error}");
+            InsertStatus::Failed
+        }
+    };
+    inner.windows_ime.restore_session(prepared);
+
+    if ime_status == InsertStatus::Inserted {
+        ime_status
+    } else if should_try_non_tsf_insertion_fallback(allow_non_tsf_insertion_fallback, ime_status) {
+        insert_via_non_tsf_fallback(inner, polished, restore_clipboard)
+    } else {
+        log::warn!("[windows-ime] TSF did not insert; non-TSF insertion fallback is disabled");
+        InsertStatus::Failed
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn should_try_non_tsf_insertion_fallback(
+    allow_non_tsf_insertion_fallback: bool,
+    ime_status: InsertStatus,
+) -> bool {
+    allow_non_tsf_insertion_fallback && ime_status != InsertStatus::Inserted
+}
+
+#[cfg(target_os = "windows")]
+fn insert_via_non_tsf_fallback(
+    inner: &Arc<Inner>,
+    polished: &str,
+    restore_clipboard: bool,
+) -> InsertStatus {
+    if inner.inserter.insert_via_unicode_keystrokes(polished) == InsertStatus::Inserted {
+        log::info!("[windows-ime] TSF unavailable; inserted via Unicode SendInput");
+        InsertStatus::Inserted
+    } else {
+        inner
+            .inserter
+            .insert_via_clipboard_fallback(polished, restore_clipboard)
+    }
 }
 
 // ─────────────────────────── helpers ───────────────────────────
@@ -2339,6 +2676,40 @@ mod tests {
         assert!(coordinator.inner.asr.lock().is_none());
     }
 
+    #[test]
+    fn abort_recording_keeps_session_non_idle_until_restore_can_run() {
+        let mut state = SessionState::default();
+        state.phase = SessionPhase::Listening;
+        state.cancelled = false;
+        state.session_id = 7;
+
+        let abort = begin_recording_abort_before_restore(&mut state).unwrap();
+
+        assert_eq!(abort.session_id, 7);
+        assert!(state.cancelled);
+        assert_eq!(state.phase, SessionPhase::Listening);
+
+        publish_abort_idle_after_restore(&mut state, abort.session_id);
+
+        assert_eq!(state.phase, SessionPhase::Idle);
+    }
+
+    #[tokio::test]
+    async fn pressed_edge_during_inserting_does_not_start_new_session() {
+        let coordinator = Coordinator::new();
+        {
+            let mut state = coordinator.inner.state.lock();
+            state.phase = SessionPhase::Inserting;
+            state.session_id = 41;
+        }
+
+        handle_pressed_edge(&coordinator.inner).await;
+
+        let state = coordinator.inner.state.lock();
+        assert_eq!(state.phase, SessionPhase::Inserting);
+        assert_eq!(state.session_id, 41);
+    }
+
     #[tokio::test]
     async fn repeated_pressed_edge_during_hold_session_does_not_restart() {
         let coordinator = Coordinator::new();
@@ -2375,6 +2746,150 @@ mod tests {
             crate::types::HotkeyCapability::current().explicit_fallback_available
         );
     }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn prepared_windows_ime_slot_is_taken_only_for_matching_session() {
+        let mut slots = vec![PreparedWindowsImeSessionSlot {
+            session_id: 2,
+            prepared: PreparedWindowsImeSession::unavailable(),
+        }];
+
+        assert!(take_matching_prepared_windows_ime_session(&mut slots, 1).is_none());
+        assert_eq!(
+            slots.iter().map(|slot| slot.session_id).collect::<Vec<_>>(),
+            vec![2]
+        );
+
+        assert!(take_matching_prepared_windows_ime_session(&mut slots, 2).is_some());
+        assert!(slots.is_empty());
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn prepared_windows_ime_sessions_keep_overlapping_snapshots() {
+        let mut slots = Vec::new();
+        store_prepared_windows_ime_session(&mut slots, 1, PreparedWindowsImeSession::unavailable());
+        store_prepared_windows_ime_session(&mut slots, 2, PreparedWindowsImeSession::unavailable());
+
+        assert_eq!(
+            slots.iter().map(|slot| slot.session_id).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+
+        assert!(take_matching_prepared_windows_ime_session(&mut slots, 1).is_some());
+        assert_eq!(
+            slots.iter().map(|slot| slot.session_id).collect::<Vec<_>>(),
+            vec![2]
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn stale_prepared_windows_ime_restore_discards_old_snapshot_without_restoring() {
+        let mut slots = Vec::new();
+        store_prepared_windows_ime_session(&mut slots, 1, PreparedWindowsImeSession::unavailable());
+        store_prepared_windows_ime_session(&mut slots, 2, PreparedWindowsImeSession::unavailable());
+
+        assert!(take_current_prepared_windows_ime_session_for_restore(&mut slots, 1, 2).is_none());
+        assert_eq!(
+            slots.iter().map(|slot| slot.session_id).collect::<Vec<_>>(),
+            vec![2]
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn non_tsf_insertion_fallback_gate_blocks_only_when_disabled() {
+        assert!(should_try_non_tsf_insertion_fallback(
+            true,
+            InsertStatus::CopiedFallback
+        ));
+        assert!(should_try_non_tsf_insertion_fallback(
+            true,
+            InsertStatus::Failed
+        ));
+        assert!(!should_try_non_tsf_insertion_fallback(
+            true,
+            InsertStatus::Inserted
+        ));
+        assert!(!should_try_non_tsf_insertion_fallback(
+            false,
+            InsertStatus::CopiedFallback
+        ));
+        assert!(!should_try_non_tsf_insertion_fallback(
+            false,
+            InsertStatus::Failed
+        ));
+    }
+
+    #[test]
+    fn focus_restore_failure_uses_specific_error_code_when_insert_fails() {
+        assert_eq!(
+            dictation_error_code(InsertStatus::Failed, false, false, false),
+            Some("focusRestoreFailed")
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn missing_windows_hwnd_is_not_present() {
+        use windows::Win32::Foundation::HWND;
+
+        assert!(!windows_hwnd_is_present(HWND::default()));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn tsf_required_failure_keeps_tsf_error_when_focus_was_ready() {
+        assert_eq!(
+            dictation_error_code(InsertStatus::Failed, false, true, false),
+            Some("windowsImeTsfRequired")
+        );
+    }
+
+    #[test]
+    fn startup_race_check_treats_newer_session_as_stale() {
+        let mut state = SessionState::default();
+        state.phase = SessionPhase::Starting;
+        state.cancelled = false;
+        state.session_id = 2;
+
+        assert_eq!(
+            startup_race_status(&state, 1),
+            StartupRaceStatus::StaleContinuation
+        );
+    }
+
+    #[test]
+    fn stale_startup_cleanup_keeps_newer_asr_resource() {
+        let coordinator = Coordinator::new();
+        let newer_asr = Arc::new(WhisperBatchASR::new(
+            "key".to_string(),
+            "http://localhost".to_string(),
+            "model".to_string(),
+        ));
+        *coordinator.inner.asr.lock() = Some(SessionResource::new(
+            2,
+            ActiveAsr::Whisper(Arc::clone(&newer_asr)),
+        ));
+
+        discard_startup_resources_for_session(&coordinator.inner, 1);
+
+        assert_eq!(
+            coordinator
+                .inner
+                .asr
+                .lock()
+                .as_ref()
+                .map(|resource| resource.session_id),
+            Some(2)
+        );
+
+        discard_startup_resources_for_session(&coordinator.inner, 2);
+
+        assert!(coordinator.inner.asr.lock().is_none());
+    }
 }
 
 fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {
@@ -2394,6 +2909,8 @@ const CAPSULE_AUTO_HIDE_DELAY_MS: u64 = 2000;
 
 /// begin_session 中各 await 之间的 cancel race 检查结果。
 enum BeginOutcome {
+    /// 启动 continuation 属于旧 session；不能改动当前 session 状态。
+    StaleContinuation,
     /// 正常进入 Listening。
     Started,
     /// Starting 阶段积累了 pending_stop 边沿，应立即 end_session（hold 快速松开 / toggle 快速双击）。
@@ -2403,12 +2920,39 @@ enum BeginOutcome {
     CancelRaced,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartupRaceStatus {
+    ActiveStarting,
+    CancelRaced,
+    StaleContinuation,
+}
+
+fn startup_race_status(state: &SessionState, captured_session_id: u64) -> StartupRaceStatus {
+    if state.session_id != captured_session_id {
+        StartupRaceStatus::StaleContinuation
+    } else if state.cancelled || state.phase != SessionPhase::Starting {
+        StartupRaceStatus::CancelRaced
+    } else {
+        StartupRaceStatus::ActiveStarting
+    }
+}
+
 /// 检查 begin_session 的 await 间隙是否被 cancel_session 打断。
 /// 必须在持有 state lock 的瞬间读，结果一拿就过期，所以用 helper 名字提醒只在
 /// 「准备做下一步副作用前」用。
-fn cancel_raced_during_starting(inner: &Arc<Inner>) -> bool {
+fn startup_race_status_for_starting(
+    inner: &Arc<Inner>,
+    captured_session_id: u64,
+) -> StartupRaceStatus {
     let state = inner.state.lock();
-    state.cancelled || state.phase != SessionPhase::Starting
+    startup_race_status(&state, captured_session_id)
+}
+
+fn set_phase_idle_if_session_matches(inner: &Arc<Inner>, session_id: u64) {
+    let mut state = inner.state.lock();
+    if state.session_id == session_id {
+        state.phase = SessionPhase::Idle;
+    }
 }
 
 fn schedule_capsule_idle(inner: &Arc<Inner>, delay_ms: u64) {
@@ -2531,7 +3075,6 @@ fn capture_frontmost_app() -> Option<String> {
 #[cfg(target_os = "windows")]
 fn restore_focus_target_if_possible(target: Option<usize>) -> bool {
     use std::ffi::c_void;
-    use std::time::Duration;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, IsIconic, IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
@@ -2572,6 +3115,53 @@ fn restore_focus_target_if_possible(target: Option<usize>) -> bool {
 #[cfg(not(target_os = "windows"))]
 fn restore_focus_target_if_possible(_target: Option<usize>) -> bool {
     true
+}
+
+#[cfg(target_os = "windows")]
+fn windows_hwnd_is_present(hwnd: windows::Win32::Foundation::HWND) -> bool {
+    hwnd != windows::Win32::Foundation::HWND::default()
+}
+
+#[cfg(target_os = "windows")]
+fn capture_ime_submit_target() -> Option<ImeSubmitTarget> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
+    };
+
+    let foreground = unsafe { GetForegroundWindow() };
+    if !windows_hwnd_is_present(foreground) {
+        return None;
+    }
+
+    let mut foreground_process_id = 0;
+    let foreground_thread_id =
+        unsafe { GetWindowThreadProcessId(foreground, Some(&mut foreground_process_id)) };
+    if foreground_thread_id == 0 {
+        return None;
+    }
+
+    let mut gui_info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    let target_window = if unsafe { GetGUIThreadInfo(foreground_thread_id, &mut gui_info).is_ok() }
+        && windows_hwnd_is_present(gui_info.hwndFocus)
+    {
+        gui_info.hwndFocus
+    } else {
+        foreground
+    };
+
+    let mut process_id = 0;
+    let thread_id = unsafe { GetWindowThreadProcessId(target_window, Some(&mut process_id)) };
+    if process_id == 0 || thread_id == 0 {
+        return None;
+    }
+
+    Some(ImeSubmitTarget {
+        process_id,
+        thread_id,
+    })
 }
 
 #[cfg(target_os = "windows")]
