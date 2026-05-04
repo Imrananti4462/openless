@@ -322,6 +322,7 @@ export const en: typeof zhCN = {
       fetchModels: 'Fetch models',
       loadingModels: 'Fetching models…',
       modelMissing: 'No model is configured. Please enter a model ID first.',
+      asrModelUnavailable: 'Current ASR model is not in the provider model list. Please select or enter a valid model.',
       modelsEmpty: 'Credentials are valid, but no models were returned.',
       modelsLoaded: 'Fetched {{count}} models.',
       selectModel: 'Select a model to fill the field above',

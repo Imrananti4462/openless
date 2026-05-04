@@ -593,8 +593,16 @@ function ProviderTools({ kind, modelAccount, onModelSelected }: { kind: 'llm' | 
       setResult(result.ok ? 'success' : 'error', t('settings.providers.validateSuccess'));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (kind === 'llm' && message === 'llmModelMissing') {
+      if ((kind === 'llm' && message === 'llmModelMissing') || (kind === 'asr' && message === 'asrModelMissing')) {
         setResult('empty', t('settings.providers.modelMissing'));
+        return;
+      }
+      if (kind === 'asr' && message === 'asrModelUnavailable') {
+        setResult('empty', t('settings.providers.asrModelUnavailable'));
+        return;
+      }
+      if (message === 'modelsEmpty') {
+        setResult('empty', t('settings.providers.modelsEmpty'));
         return;
       }
       setResult('error', providerErrorMessage(error, t));

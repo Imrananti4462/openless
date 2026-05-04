@@ -155,12 +155,9 @@ pub async fn validate_provider_credentials(kind: String) -> Result<ProviderCheck
         "llm" => validate_llm_provider()
             .await
             .map(|()| ProviderCheckResult { ok: true }),
-        "asr" => {
-            let config = read_openai_provider_config(&kind)?;
-            fetch_provider_models(&config)
-                .await
-                .map(|_| ProviderCheckResult { ok: true })
-        }
+        "asr" => validate_asr_provider()
+            .await
+            .map(|()| ProviderCheckResult { ok: true }),
         _ => Err(format!("unknown provider kind: {kind}")),
     }
 }
@@ -230,6 +227,24 @@ async fn validate_llm_provider() -> Result<(), String> {
             }
             other => other.to_string(),
         })
+}
+
+async fn validate_asr_provider() -> Result<(), String> {
+    let config = read_openai_provider_config("asr")?;
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| "asrModelMissing".to_string())?;
+    let models = fetch_provider_models(&config).await?;
+    if models.is_empty() {
+        return Err("modelsEmpty".to_string());
+    }
+    let model = model.trim();
+    if models.iter().any(|m| m == model) {
+        Ok(())
+    } else {
+        Err("asrModelUnavailable".to_string())
+    }
 }
 
 async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec<String>, String> {
