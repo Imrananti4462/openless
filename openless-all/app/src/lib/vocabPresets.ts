@@ -6,10 +6,15 @@ export const DEFAULT_VOCAB_PRESETS: VocabPreset[] = defaultPresetsJson as VocabP
 
 export async function loadVocabPresets(): Promise<VocabPreset[]> {
   const userPresets = await listVocabPresets();
-  if (!Array.isArray(userPresets) || userPresets.length === 0) {
+  if (!Array.isArray(userPresets)) {
     return DEFAULT_VOCAB_PRESETS;
   }
-  return userPresets;
+  const merged = new Map(DEFAULT_VOCAB_PRESETS.map(p => [p.id, p] as const));
+  for (const preset of userPresets) {
+    if (!preset || !preset.id) continue;
+    merged.set(preset.id, preset);
+  }
+  return Array.from(merged.values());
 }
 
 export async function persistVocabPresets(presets: VocabPreset[]) {
