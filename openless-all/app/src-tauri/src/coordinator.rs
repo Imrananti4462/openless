@@ -1676,10 +1676,15 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         .await
     };
 
-    // 仅在“纯 ASR 直出”场景做强制简繁收敛，避免误伤翻译/常规 LLM 输出：
-    // - mode=Raw：本来就不走润色
-    // - polish_error.is_some()：润色/翻译失败后回退到原始 ASR 文本
-    let polished = if !translation_active && (mode == PolishMode::Raw || polish_error.is_some()) {
+    // 仅在“ASR 直出文本”场景做强制简繁收敛，避免误伤成功的翻译/常规 LLM 输出：
+    // - 非翻译模式：mode=Raw（本来就不走润色）或润色失败回退 raw
+    // - 翻译模式：仅翻译失败回退 raw 时才收敛
+    let should_force_script = if translation_active {
+        polish_error.is_some()
+    } else {
+        mode == PolishMode::Raw || polish_error.is_some()
+    };
+    let polished = if should_force_script {
         apply_chinese_script_preference(&polished, chinese_script_preference)
     } else {
         polished
