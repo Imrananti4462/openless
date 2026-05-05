@@ -124,6 +124,13 @@ export interface UserPreferences {
   qaHotkey: QaHotkeyBinding | null;
   /** 是否把 Q&A 历史写到本地存档。详见 issue #118。 */
   qaSaveHistory: boolean;
+  /** 本地 Qwen3-ASR 当前激活的模型 id。仅在 activeAsrProvider === 'local-qwen3' 时有意义。 */
+  localAsrActiveModel: string;
+  /** 本地模型下载源镜像（'huggingface' / 'hf-mirror'）。 */
+  localAsrMirror: string;
+  /** 本地 ASR 引擎在内存中的保留时长（秒）。0 = 说完话即释放；
+   *  300 = 默认 5 分钟；86400 ≈ 不释放（保持加载）。 */
+  localAsrKeepLoadedSecs: number;
 }
 
 /** Rust 通过 `qa:state` 事件下发的 payload。

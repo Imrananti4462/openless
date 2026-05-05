@@ -54,6 +54,9 @@ enum SessionPhase {
 enum ActiveAsr {
     Volcengine(Arc<VolcengineStreamingASR>),
     Whisper(Arc<WhisperBatchASR>),
+    /// 本地 Qwen3-ASR；只在 macOS + 模型已下载时可达。
+    #[cfg(target_os = "macos")]
+    Local(Arc<crate::asr::local::LocalQwenAsr>),
 }
 
 struct SessionResource<T> {
@@ -123,6 +126,9 @@ struct Inner {
     prepared_windows_ime_session: Arc<Mutex<Vec<PreparedWindowsImeSessionSlot>>>,
     state: Mutex<SessionState>,
     asr: Mutex<Option<SessionResource<ActiveAsr>>>,
+    /// 本地 Qwen3-ASR 引擎缓存。跨会话复用，避免每次重加载 1.2GB+ 模型。
+    /// 释放时机由 prefs.local_asr_keep_loaded_secs 决定。
+    local_asr_cache: Arc<crate::asr::local::LocalAsrCache>,
     recorder: Mutex<Option<SessionResource<Recorder>>>,
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
@@ -229,8 +235,55 @@ impl Coordinator {
                 qa_asr: Mutex::new(None),
                 qa_recorder: Mutex::new(None),
                 qa_stream_cancelled: Arc::new(AtomicBool::new(false)),
+                local_asr_cache: Arc::new(crate::asr::local::LocalAsrCache::new()),
             }),
         }
+    }
+
+    /// 后台预加载本地 ASR 引擎；当用户在 UI 切到 local-qwen3 provider 时调一次。
+    /// 加载是阻塞且数秒，所以放 spawn_blocking 里，不影响 UI 响应。
+    /// 模型未下载或不在 macOS 上时静默跳过。
+    pub fn preload_local_asr_in_background(self: &Arc<Self>) {
+        #[cfg(target_os = "macos")]
+        {
+            let inner = Arc::clone(&self.inner);
+            tauri::async_runtime::spawn(async move {
+                let prefs = inner.prefs.get();
+                let model_id = match crate::asr::local::ModelId::from_str(&prefs.local_asr_active_model) {
+                    Some(m) => m,
+                    None => return,
+                };
+                if !crate::asr::local::models::is_downloaded(model_id) {
+                    log::info!("[coord] local ASR preload skipped: model {} not downloaded", model_id.as_str());
+                    return;
+                }
+                let dir = match crate::asr::local::models::model_dir(model_id) {
+                    Ok(d) => d,
+                    Err(_) => return,
+                };
+                let cache = Arc::clone(&inner.local_asr_cache);
+                let mid = model_id.as_str().to_string();
+                let _ = tauri::async_runtime::spawn_blocking(move || {
+                    if let Err(e) = cache.get_or_load(&mid, &dir) {
+                        log::warn!("[coord] local ASR preload failed: {e:#}");
+                    }
+                })
+                .await;
+            });
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            // no-op
+        }
+    }
+
+    /// 释放当前缓存的本地 ASR 引擎（用户主动点 / 或 删除模型时调）。
+    pub fn release_local_asr_engine(&self) {
+        self.inner.local_asr_cache.release_now();
+    }
+
+    pub fn local_asr_loaded_model(&self) -> Option<String> {
+        self.inner.local_asr_cache.loaded_model_id()
     }
 
     pub fn bind_app(&self, handle: AppHandle) {
@@ -798,6 +851,8 @@ fn cancel_active_asr(asr: ActiveAsr) {
     match asr {
         ActiveAsr::Volcengine(v) => v.cancel(),
         ActiveAsr::Whisper(w) => w.cancel(),
+        #[cfg(target_os = "macos")]
+        ActiveAsr::Local(local) => local.cancel(),
     }
 }
 
@@ -1007,6 +1062,37 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
     emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
 
     let active_asr = CredentialsVault::get_active_asr();
+
+    #[cfg(target_os = "macos")]
+    if crate::asr::local::is_local_qwen3(&active_asr) {
+        let local = match build_local_qwen3(inner).await {
+            Ok(l) => l,
+            Err(e) => {
+                log::error!("[coord] 本地 Qwen3-ASR 初始化失败: {e:#}");
+                emit_capsule(
+                    inner,
+                    CapsuleState::Error,
+                    0.0,
+                    0,
+                    Some(format!("本地模型初始化失败: {e}")),
+                    None,
+                );
+                restore_prepared_windows_ime_session(inner, current_session_id);
+                inner.state.lock().phase = SessionPhase::Idle;
+                schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+                return Err(format!("local ASR init failed: {e}"));
+            }
+        };
+        store_asr_for_session(
+            inner,
+            current_session_id,
+            ActiveAsr::Local(Arc::clone(&local)),
+        );
+        let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
+        start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer)
+            .await?;
+        return Ok(());
+    }
 
     if is_whisper_compatible_provider(&active_asr) {
         let (api_key, base_url, model) = read_whisper_credentials();
@@ -1442,6 +1528,52 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     inner.state.lock().phase = SessionPhase::Idle;
                     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
                     return Err("whisper global timeout".to_string());
+                }
+            }
+        }
+        #[cfg(target_os = "macos")]
+        ActiveAsr::Local(local) => {
+            // 与 Volcengine/Whisper 一致包一层 global timeout（来自 origin/main）。
+            // 注：缓存命中时 transcribe 不含 load 时间；冷启动 load 已在 build_local_qwen3
+            // 提前完成，所以 15s 给 transcribe 本身足够。
+            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let result = tokio::time::timeout(timeout_duration, local.transcribe()).await;
+            inner.local_asr_cache.touch();
+            schedule_local_asr_release(inner);
+            match result {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    log::error!("[coord] local Qwen3-ASR transcribe failed: {e:#}");
+                    emit_capsule(
+                        inner,
+                        CapsuleState::Error,
+                        0.0,
+                        elapsed,
+                        Some(format!("本地识别失败: {e}")),
+                        None,
+                    );
+                    restore_prepared_windows_ime_session(inner, current_session_id);
+                    inner.state.lock().phase = SessionPhase::Idle;
+                    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+                    return Err(e.to_string());
+                }
+                Err(_) => {
+                    log::error!(
+                        "[coord] local Qwen3-ASR 全局超时 {} 秒",
+                        COORDINATOR_GLOBAL_TIMEOUT_SECS
+                    );
+                    emit_capsule(
+                        inner,
+                        CapsuleState::Error,
+                        0.0,
+                        elapsed,
+                        Some("识别超时".to_string()),
+                        None,
+                    );
+                    restore_prepared_windows_ime_session(inner, current_session_id);
+                    inner.state.lock().phase = SessionPhase::Idle;
+                    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+                    return Err("local global timeout".to_string());
                 }
             }
         }
@@ -1922,6 +2054,19 @@ fn ensure_microphone_permission(_inner: &Arc<Inner>) -> Result<(), String> {
 
 fn ensure_asr_credentials() -> Result<(), String> {
     let active_asr = CredentialsVault::get_active_asr();
+
+    // 本地 Qwen3-ASR 没有"凭据"概念，但需要：(a) macOS 平台 (b) 模型已下载。
+    if crate::asr::local::is_local_qwen3(&active_asr) {
+        #[cfg(not(target_os = "macos"))]
+        {
+            return Err("本地 ASR 当前仅支持 macOS（Windows 见 issue #256）".to_string());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            return ensure_local_qwen3_model_ready();
+        }
+    }
+
     if is_whisper_compatible_provider(&active_asr) {
         let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
             .ok()
@@ -1939,6 +2084,63 @@ fn ensure_asr_credentials() -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_local_qwen3_model_ready() -> Result<(), String> {
+    let prefs = || -> Result<crate::types::UserPreferences, String> {
+        // 这里没法拿到 inner，直接读 preferences.json 即可（Coordinator 写盘后总是同步的）。
+        crate::persistence::PreferencesStore::new()
+            .map_err(|e| e.to_string())
+            .map(|s| s.get())
+    }()?;
+    let model_id = crate::asr::local::ModelId::from_str(&prefs.local_asr_active_model)
+        .ok_or_else(|| format!("未知的本地模型 id: {}", prefs.local_asr_active_model))?;
+    if !crate::asr::local::models::is_downloaded(model_id) {
+        return Err(format!(
+            "本地模型 {} 未下载完整，请到 设置 → 模型设置 中下载",
+            model_id.as_str()
+        ));
+    }
+    Ok(())
+}
+
+/// 一次 dictation 结束后，按 prefs.local_asr_keep_loaded_secs 决定何时释放
+/// 内存里的 Qwen3-ASR 引擎。0 = 立即释放；其它值 = sleep N 秒后看 last_used。
+/// 多次会话叠加多个 sleep 任务，每个独立 check：只要中间又被使用过就跳过释放。
+fn schedule_local_asr_release(inner: &Arc<Inner>) {
+    let keep_secs = inner.prefs.get().local_asr_keep_loaded_secs;
+    let cache = Arc::clone(&inner.local_asr_cache);
+    if keep_secs == 0 {
+        cache.release_now();
+        return;
+    }
+    let dur = std::time::Duration::from_secs(keep_secs as u64);
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(dur).await;
+        cache.release_if_idle(dur);
+    });
+}
+
+#[cfg(target_os = "macos")]
+async fn build_local_qwen3(inner: &Arc<Inner>) -> anyhow::Result<Arc<crate::asr::local::LocalQwenAsr>> {
+    let prefs = inner.prefs.get();
+    let model_id = crate::asr::local::ModelId::from_str(&prefs.local_asr_active_model)
+        .ok_or_else(|| anyhow::anyhow!("未知本地模型 id: {}", prefs.local_asr_active_model))?;
+    let dir = crate::asr::local::models::model_dir(model_id)?;
+    let app = inner
+        .app
+        .lock()
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("AppHandle 未绑定"))?;
+    // 走缓存：如果已有同 id 的引擎在内存里就直接复用，避免每次会话都重加载
+    // 1.2GB+ 模型。第一次加载阻塞数秒，spawn_blocking 不卡 tokio runtime。
+    let cache = Arc::clone(&inner.local_asr_cache);
+    let mid = model_id.as_str().to_string();
+    let engine = tauri::async_runtime::spawn_blocking(move || cache.get_or_load(&mid, &dir))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e:#}"))??;
+    Ok(Arc::new(crate::asr::local::LocalQwenAsr::new(app, engine)))
 }
 
 /// `whisper` 是 OpenAI 原生；`siliconflow` / `zhipu` / `groq` 都暴露

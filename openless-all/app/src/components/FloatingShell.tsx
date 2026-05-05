@@ -16,6 +16,7 @@ import { Vocab } from '../pages/Vocab';
 import { Style } from '../pages/Style';
 import { Translation } from '../pages/Translation';
 import { SelectionAsk } from '../pages/SelectionAsk';
+import { LocalAsr } from '../pages/LocalAsr';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import {
   HOTKEY_MODE_MIGRATION_ACK_KEY,
@@ -28,7 +29,7 @@ import {
   PROVIDER_SETUP_PROMPT_DEFERRED_KEY,
   shouldShowProviderSetupPrompt,
 } from '../lib/providerSetup';
-import type { SettingsSectionId } from '../pages/Settings';
+import { NAVIGATE_LOCAL_ASR_EVENT, type SettingsSectionId } from '../pages/Settings';
 import { useAppState, type AppTab } from '../state/useAppState';
 
 interface NavItem {
@@ -45,6 +46,7 @@ const NAV_BASE: Array<Omit<NavItem, 'name'>> = [
   { id: 'style', icon: 'style', cmp: Style },
   { id: 'translation', icon: 'translate', cmp: Translation },
   { id: 'selectionAsk', icon: 'selectionAsk', cmp: SelectionAsk },
+  { id: 'localAsr', icon: 'archive', cmp: LocalAsr },
 ];
 
 const RELEASE_NOTES_URL = 'https://github.com/appergb/openless/releases';
@@ -133,6 +135,16 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
       setHotkeyModePromptOpen(true);
     }
   }, []);
+
+  // Settings → ASR 选 local-qwen3 时的"前往模型设置"事件 → 关 modal + 切 tab。
+  useEffect(() => {
+    const onNavigate = () => {
+      setSettingsOpen(false);
+      setCurrentTab('localAsr');
+    };
+    window.addEventListener(NAVIGATE_LOCAL_ASR_EVENT, onNavigate);
+    return () => window.removeEventListener(NAVIGATE_LOCAL_ASR_EVENT, onNavigate);
+  }, [setCurrentTab, setSettingsOpen]);
 
   const rememberProviderPrompt = () => {
     window.sessionStorage.setItem(PROVIDER_SETUP_PROMPT_DEFERRED_KEY, '1');
