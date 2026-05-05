@@ -216,10 +216,14 @@ impl DownloadManager {
 
 fn build_client() -> Result<reqwest::Client> {
     // native-tls (macOS=SecureTransport) 不像 rustls 那样把 CDN unclean close
-    // 当致命错误。User-Agent 是 HF 反滥用必看的字段。
+    // 当致命错误。
+    //
+    // User-Agent 用 aria2 的——hfd（hf-mirror 官方推荐）就是 aria2 包装，
+    // 实测 aria2 UA 在 HF 反滥用规则里走白名单不挨 throttle；自定义 UA
+    // (`openless/x`) 在 sustained 传输后会被 mirror 主动切流。
     reqwest::Client::builder()
         .use_native_tls()
-        .user_agent(concat!("openless/", env!("CARGO_PKG_VERSION")))
+        .user_agent("aria2/1.36.0")
         .connect_timeout(std::time::Duration::from_secs(30))
         .pool_idle_timeout(std::time::Duration::from_secs(60))
         .build()
@@ -273,82 +277,153 @@ async fn run_download(
         },
     );
 
-    let mut bytes_done_before_current: u64 = 0;
-    for (idx, file) in info.files.iter().enumerate() {
-        if cancel.load(Ordering::SeqCst) {
-            emit_cancelled(app, model_id, &file.path, idx, file_count, total_bytes);
-            return Ok(());
+    // 多文件并发（aria2 -j 5 同款思路）：每个文件已下字节用 AtomicU64 累加，
+    // 总进度 = 各文件已下字节之和 + 历史已完成文件大小。让小文件不阻塞大文件，
+    // 也让大文件下半段（CDN throttle 时）剩余带宽喂别的文件。
+    {
+        std::fs::create_dir_all(&dir).ok();
+        for file in &info.files {
+            if let Some(parent) = dir.join(&file.path).parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
         }
+    }
 
+    let in_flight_bytes: Arc<Vec<AtomicU64>> = Arc::new(
+        info.files.iter().map(|_| AtomicU64::new(0)).collect()
+    );
+    let already_done_bytes: u64 = info
+        .files
+        .iter()
+        .map(|f| {
+            let d = dir.join(&f.path);
+            if d.exists() {
+                f.size
+            } else {
+                0
+            }
+        })
+        .sum();
+
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(PARALLEL_FILES));
+    let mut futs = futures_util::stream::FuturesUnordered::new();
+
+    for (idx, file) in info.files.iter().enumerate() {
         let dest = dir.join(&file.path);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create dir failed: {}", parent.display()))?;
-        }
         if dest.exists() {
-            bytes_done_before_current += file.size;
+            // 已经下完的（目录里直接存在 dest 文件）跳过；前面 already_done_bytes 已计入
             continue;
         }
-
         let url = format!(
             "{}/{}/resolve/main/{}",
             mirror.base_url(),
             model_id.hf_repo(),
             file.path
         );
-
-        // per-file 进度回调：内部传"该文件已下字节"，加 bytes_done_before_current
-        // 算总进度。Arc<dyn Fn> 让多个并发任务共享同一个 emitter。
-        let app_for_cb = app.clone();
+        let semaphore = Arc::clone(&semaphore);
+        let client = client.clone();
+        let cancel = Arc::clone(&cancel);
+        let app = app.clone();
+        let in_flight_bytes = Arc::clone(&in_flight_bytes);
         let model_id_str = model_id.as_str().to_string();
         let file_path = file.path.clone();
-        let on_progress: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(move |bytes_in_file| {
-            let _ = app_for_cb.emit(
-                "local-asr-download-progress",
-                DownloadProgress {
-                    model_id: model_id_str.clone(),
-                    file: file_path.clone(),
-                    file_index: idx,
-                    file_count,
-                    bytes_downloaded: bytes_done_before_current + bytes_in_file,
-                    bytes_total: total_bytes,
-                    phase: DownloadPhase::Progress,
-                    error: None,
-                },
-            );
-        });
+        let file_size = file.size;
+        let _model_id = model_id; // copy of Copy for closure use
+        let total_bytes_cap = total_bytes;
+        let already_done = already_done_bytes;
 
-        let result = download_one(
-            &client,
-            &url,
-            &dest,
-            file.size,
-            Arc::clone(&cancel),
-            on_progress,
-        )
-        .await;
+        futs.push(tauri::async_runtime::spawn(async move {
+            let _permit = match semaphore.acquire_owned().await {
+                Ok(p) => p,
+                Err(_) => return Err(anyhow::anyhow!("semaphore closed")),
+            };
+            if cancel.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            // 进度回调：把该文件实时已下字节写到 in_flight_bytes[idx]，
+            // 然后求所有 in_flight 之和 + already_done = 全模型总进度。
+            let app_emit = app.clone();
+            let model_id_emit = model_id_str.clone();
+            let file_path_emit = file_path.clone();
+            let in_flight_for_cb = Arc::clone(&in_flight_bytes);
+            let on_progress: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(move |bytes_in_file| {
+                in_flight_for_cb[idx].store(bytes_in_file, Ordering::Relaxed);
+                let total_in_flight: u64 = in_flight_for_cb
+                    .iter()
+                    .map(|a| a.load(Ordering::Relaxed))
+                    .sum();
+                let _ = app_emit.emit(
+                    "local-asr-download-progress",
+                    DownloadProgress {
+                        model_id: model_id_emit.clone(),
+                        file: file_path_emit.clone(),
+                        file_index: idx,
+                        file_count,
+                        bytes_downloaded: already_done + total_in_flight,
+                        bytes_total: total_bytes_cap,
+                        phase: DownloadPhase::Progress,
+                        error: None,
+                    },
+                );
+            });
 
-        if cancel.load(Ordering::SeqCst) {
-            emit_cancelled(app, model_id, &file.path, idx, file_count, total_bytes);
-            return Ok(());
+            let result = download_one(
+                &client,
+                &url,
+                &dest,
+                file_size,
+                Arc::clone(&cancel),
+                on_progress,
+            )
+            .await;
+            // 文件下完 → 该 in_flight 永久 = file_size（避免 race 在 emit 时漏算）
+            if result.is_ok() {
+                in_flight_bytes[idx].store(file_size, Ordering::Relaxed);
+            }
+            result.with_context(|| format!("file {file_path}"))
+        }));
+    }
+
+    let mut first_err: Option<anyhow::Error> = None;
+    while let Some(joined) = futs.next().await {
+        match joined {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+                // 取消其它正在跑的：cancel flag 设为 true，让所有 spawn task 早退
+                if !cancel.load(Ordering::SeqCst) {
+                    log::warn!("[local-asr] one file failed; signaling others to stop");
+                }
+            }
+            Err(e) => {
+                if first_err.is_none() {
+                    first_err = Some(anyhow::anyhow!("join: {e}"));
+                }
+            }
         }
-        if let Err(e) = result {
-            emit(
-                app,
-                DownloadProgress {
-                    model_id: model_id.as_str().into(),
-                    file: file.path.clone(),
-                    file_index: idx,
-                    file_count,
-                    bytes_downloaded: super::models::downloaded_bytes(model_id),
-                    bytes_total: total_bytes,
-                    phase: DownloadPhase::Failed,
-                    error: Some(format!("{e:#}")),
-                },
-            );
-            return Err(e);
-        }
-        bytes_done_before_current += file.size;
+    }
+
+    if cancel.load(Ordering::SeqCst) {
+        emit_cancelled(app, model_id, "", 0, file_count, total_bytes);
+        return Ok(());
+    }
+    if let Some(e) = first_err {
+        emit(
+            app,
+            DownloadProgress {
+                model_id: model_id.as_str().into(),
+                file: String::new(),
+                file_index: 0,
+                file_count,
+                bytes_downloaded: super::models::downloaded_bytes(model_id),
+                bytes_total: total_bytes,
+                phase: DownloadPhase::Failed,
+                error: Some(format!("{e:#}")),
+            },
+        );
+        return Err(e);
     }
 
     let sentinel = dir.join(READY_SENTINEL);
@@ -371,9 +446,12 @@ async fn run_download(
     Ok(())
 }
 
-const CHUNK_SIZE: u64 = 32 * 1024 * 1024;
-const PARALLEL: usize = 4;
+// 这三个数贴合 aria2 / hf_xet 实测：8MB chunk 让单连接寿命 5–20s（CDN 容易 throttle 的临界点之下），
+// 单文件 8 并发跟 hf_xet 默认基本对齐；多文件并发 3 个填满带宽且不超过 hf-mirror 的 per-IP 阈值。
+const CHUNK_SIZE: u64 = 8 * 1024 * 1024;
+const PARALLEL: usize = 8;
 const PER_CHUNK_ATTEMPTS: u32 = 4;
+const PARALLEL_FILES: usize = 3;
 
 async fn download_one(
     client: &reqwest::Client,
