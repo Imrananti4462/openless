@@ -158,7 +158,7 @@ function Assert-OpenLessImeInstalled {
   Assert-RegistryKey -View Registry64 -SubKey "Software\Microsoft\CTF\TIP\$TextServiceClsid\Category\Category\$SystrayCategoryGuid\$TextServiceClsid" -Label "TSF systray category"
 
   foreach ($key in $ExpectedBackendKeys) {
-    Write-Host "[trace] backend-required key: HKLM\$key"
+    Assert-RegistryKey -View Registry64 -SubKey $key -Label "backend-required"
   }
 
   Write-Host "[ok] Windows IME backend would report installed"
