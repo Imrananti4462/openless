@@ -236,7 +236,12 @@ async fn run_download(
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("create model dir failed: {}", dir.display()))?;
 
+    // 用 native-tls (macOS = SecureTransport) 而非 rustls：HuggingFace 的 LFS CDN
+    // 经常不发 TLS close_notify 就关 TCP，rustls 0.22+ 把这当致命 unexpected_eof，
+    // 实际数据已经收齐也算"下载失败"。SecureTransport 对 unclean close 容错。
+    // (Volcengine WebSocket 那边继续用 rustls，那条链路稳定。)
     let client = reqwest::Client::builder()
+        .use_native_tls()
         .build()
         .context("build reqwest client failed")?;
 
@@ -299,7 +304,9 @@ async fn run_download(
             model_id.hf_repo(),
             file.path
         );
-        let result = download_one(&client, &url, &dest, cancel, |bytes| {
+        // 自动 retry 一次：HF 大文件偶发瞬时网断很常见，不让用户手点重试。
+        // 连 cancel 信号也尊重——retry 时会再次检查。
+        let mut result = retry_download_one(&client, &url, &dest, cancel, |bytes| {
             emit(
                 app,
                 DownloadProgress {
@@ -315,6 +322,29 @@ async fn run_download(
             );
         })
         .await;
+        if result.is_err() && !cancel.load(Ordering::SeqCst) {
+            log::warn!(
+                "[local-asr] {} retry once after first failure",
+                file.path
+            );
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            result = retry_download_one(&client, &url, &dest, cancel, |bytes| {
+                emit(
+                    app,
+                    DownloadProgress {
+                        model_id: model_id.as_str().into(),
+                        file: file.path.clone(),
+                        file_index: idx,
+                        file_count,
+                        bytes_downloaded: bytes_done_before_current + bytes,
+                        bytes_total: total_bytes,
+                        phase: DownloadPhase::Progress,
+                        error: None,
+                    },
+                );
+            })
+            .await;
+        }
         match result {
             Ok(()) => {
                 bytes_done_before_current += file.size;
@@ -361,6 +391,17 @@ async fn run_download(
         },
     );
     Ok(())
+}
+
+/// 下载单个文件到 `dest`；同名包装方便上层 retry 时复用所有参数。
+async fn retry_download_one(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+    cancel: &AtomicBool,
+    on_chunk: impl FnMut(u64),
+) -> Result<()> {
+    download_one(client, url, dest, cancel, on_chunk).await
 }
 
 /// 下载单个文件到 `dest`，失败/取消时**保留** `.partial` 用于续传（HTTP Range 头）。

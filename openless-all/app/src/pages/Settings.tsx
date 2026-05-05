@@ -42,6 +42,16 @@ import i18n, {
   type SupportedLocale,
 } from '../i18n';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
+import {
+  getLocalAsrSettings,
+  listLocalAsrModels,
+  type LocalAsrModelStatus,
+  type LocalAsrSettings,
+} from '../lib/localAsr';
+
+/// Settings → ASR 选了 local-qwen3 时触发跳到「模型设置」页 + 关 Settings modal。
+/// FloatingShell 监听同名事件做 setCurrentTab('localAsr') + setSettingsOpen(false)。
+export const NAVIGATE_LOCAL_ASR_EVENT = 'openless:navigate-local-asr';
 
 interface SettingsProps {
   embedded?: boolean;
@@ -556,6 +566,8 @@ function ProvidersSection() {
               {t('settings.providers.volcengineMappingNote')}
             </div>
           </>
+        ) : committedAsrProvider === 'local-qwen3' ? (
+          <LocalAsrProviderHint />
         ) : (
           <>
             <CredentialField key={`${committedAsrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" mono mask />
@@ -1227,4 +1239,70 @@ function adapterDisplayName(adapter: HotkeyCapability['adapter'] | HotkeyStatus[
   if (adapter === 'macEventTap') return i18n.t('hotkey.adapter.macEventTap');
   if (adapter === 'windowsLowLevel') return i18n.t('hotkey.adapter.windowsLowLevel');
   return i18n.t('hotkey.adapter.rdev');
+}
+
+/// 本地 Qwen3-ASR 在 Settings → 服务商区里**不**让用户填空——展示当前激活模型
+/// 是否已下载，引导一键跳到「模型设置」页继续操作。
+function LocalAsrProviderHint() {
+  const { t } = useTranslation();
+  const [settings, setSettings] = useState<LocalAsrSettings | null>(null);
+  const [models, setModels] = useState<LocalAsrModelStatus[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [s, list] = await Promise.all([getLocalAsrSettings(), listLocalAsrModels()]);
+        if (!cancelled) {
+          setSettings(s);
+          setModels(list);
+        }
+      } catch (err) {
+        console.warn('[settings] load local asr status failed', err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const goToLocalAsr = () => {
+    window.dispatchEvent(new CustomEvent(NAVIGATE_LOCAL_ASR_EVENT));
+  };
+
+  if (loading) {
+    return (
+      <div style={{ padding: '12px 0', fontSize: 12.5, color: 'var(--ol-ink-4)' }}>
+        {t('common.loading')}
+      </div>
+    );
+  }
+
+  const active = models.find(m => m.id === settings?.activeModel);
+  const isReady = active?.isDownloaded ?? false;
+
+  return (
+    <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>
+        {t('settings.providers.localAsrHint')}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Pill tone={isReady ? 'ok' : 'outline'} size="sm">
+          {isReady
+            ? t('settings.providers.localAsrReady', { model: active?.id ?? '' })
+            : t('settings.providers.localAsrNotReady', { model: settings?.activeModel ?? '' })}
+        </Pill>
+      </div>
+      <div>
+        <Btn variant={isReady ? 'ghost' : 'primary'} size="sm" onClick={goToLocalAsr}>
+          {isReady
+            ? t('settings.providers.localAsrManage')
+            : t('settings.providers.localAsrGoDownload')}
+        </Btn>
+      </div>
+    </div>
+  );
 }
