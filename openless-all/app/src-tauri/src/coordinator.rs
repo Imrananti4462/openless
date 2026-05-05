@@ -926,8 +926,8 @@ fn release_recording_mute(inner: &Arc<Inner>, owner: &str) {
 fn stop_qa_recorder(inner: &Arc<Inner>) {
     if let Some(rec) = inner.qa_recorder.lock().take() {
         rec.stop();
+        release_recording_mute(inner, "qa");
     }
-    release_recording_mute(inner, "qa");
 }
 
 fn take_recorder_for_session(inner: &Arc<Inner>, session_id: u64) -> Option<Recorder> {
