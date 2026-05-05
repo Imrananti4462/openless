@@ -128,8 +128,13 @@ assert.match(nsisHook, /File \/oname=OpenLessIme\.dll/, "NSIS should embed OpenL
 assert.match(nsisHook, /Sysnative\\regsvr32\.exe/, "NSIS should use 64-bit regsvr32 for the x64 IME");
 assert.match(nsisHook, /SysWOW64\\regsvr32\.exe/, "NSIS should use 32-bit regsvr32 for the x86 IME");
 assert.match(nsisHook, /Abort/, "NSIS install should fail if TSF registration fails");
+assert.match(nsisHook, /OPENLESS_IME_ABORT_IF_FAILED \$0 "x64 unregistration"/, "NSIS uninstall should fail if x64 TSF unregistration fails");
+assert.match(nsisHook, /OPENLESS_IME_ABORT_IF_FAILED \$0 "x86 unregistration"/, "NSIS uninstall should fail if x86 TSF unregistration fails");
 
 assert.match(imeInstallSmoke, /\[ValidateSet\("nsis", "msi"\)\]/, "install smoke should support both Windows installers");
+assert.match(imeInstallSmoke, /Join-ProcessArguments/, "install smoke should quote process arguments before Start-Process");
+assert.match(imeInstallSmoke, /\$commandLine = Join-ProcessArguments \$ArgumentList/, "install smoke should build a single quoted command line");
+assert.match(imeInstallSmoke, /Start-Process -FilePath \$FilePath -ArgumentList \$commandLine/, "install smoke should pass a single quoted command line to Start-Process");
 assert.match(imeInstallSmoke, /OpenLessImeSubmit/, "install smoke should preserve TSF backend context");
 assert.match(imeInstallSmoke, /Software\\Classes\\CLSID\\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D\}\\InprocServer32/, "install smoke should check x64 COM registration");
 assert.match(imeInstallSmoke, /Software\\WOW6432Node\\Classes\\CLSID\\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D\}\\InprocServer32/, "install smoke should check x86 COM registration");

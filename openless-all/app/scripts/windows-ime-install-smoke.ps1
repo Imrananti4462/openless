@@ -33,6 +33,25 @@ function Test-IsAdministrator {
   return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Join-ProcessArguments {
+  param(
+    [string[]]$ArgumentList = @()
+  )
+
+  $quoted = foreach ($argument in $ArgumentList) {
+    if ($argument.Length -eq 0) {
+      '""'
+    } elseif ($argument -notmatch '[\s"]') {
+      $argument
+    } else {
+      $escaped = $argument -replace '(\\*)"', '$1$1\"'
+      $escaped = $escaped -replace '(\\+)$', '$1$1'
+      '"' + $escaped + '"'
+    }
+  }
+  return ($quoted -join " ")
+}
+
 function Invoke-CheckedProcess {
   param(
     [Parameter(Mandatory = $true)]
@@ -42,8 +61,9 @@ function Invoke-CheckedProcess {
     [string]$Label
   )
 
-  Write-Host "[run] $Label`: $FilePath $($ArgumentList -join ' ')"
-  $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -Wait -PassThru
+  $commandLine = Join-ProcessArguments $ArgumentList
+  Write-Host "[run] $Label`: $FilePath $commandLine"
+  $process = Start-Process -FilePath $FilePath -ArgumentList $commandLine -Wait -PassThru
   if ($process.ExitCode -ne 0) {
     throw "$Label failed with exit code $($process.ExitCode)"
   }
