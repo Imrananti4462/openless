@@ -18,7 +18,9 @@ interface HotkeySettingsContextValue {
   capability: HotkeyCapability | null;
   loading: boolean;
   refresh: () => Promise<void>;
-  updatePrefs: (next: UserPreferences) => Promise<void>;
+  updatePrefs: (
+    next: UserPreferences | ((current: UserPreferences) => UserPreferences),
+  ) => Promise<void>;
 }
 
 const HotkeySettingsContext = createContext<HotkeySettingsContextValue | null>(null);
@@ -79,11 +81,17 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
     );
   }, [prefs, queueSetSettings]);
 
-  const updatePrefs = useCallback(async (next: UserPreferences) => {
-    setPrefs(next);
-    latestPrefsRef.current = next;
-    await queueSetSettings(() => next);
-  }, [queueSetSettings]);
+  const updatePrefs = useCallback(
+    async (next: UserPreferences | ((current: UserPreferences) => UserPreferences)) => {
+      const current = latestPrefsRef.current;
+      if (!current) return;
+      const resolved = typeof next === 'function' ? next(current) : next;
+      setPrefs(resolved);
+      latestPrefsRef.current = resolved;
+      await queueSetSettings(() => resolved);
+    },
+    [queueSetSettings],
+  );
 
   const value = useMemo<HotkeySettingsContextValue>(
     () => ({

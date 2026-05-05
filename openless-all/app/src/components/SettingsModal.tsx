@@ -312,17 +312,18 @@ const btnGhost: CSSProperties = {
 // 真正可用的语言切换器 —— 用原生 <select>，与 Settings → Language 分区共享同一份 localStorage 偏好。
 function LanguagePicker() {
   const { t } = useTranslation();
-  const { prefs, updatePrefs } = useHotkeySettings();
+  const { updatePrefs } = useHotkeySettings();
   const [pref, setPref] = useState<SupportedLocale | typeof FOLLOW_SYSTEM>(getLocalePreference());
 
   const apply = async (next: SupportedLocale | typeof FOLLOW_SYSTEM) => {
     setPref(next);
     const resolved = await setLocalePreference(next);
-    if (!prefs) return;
     const chineseScriptPreference =
       resolved === 'zh-CN' ? 'simplified' : resolved === 'zh-TW' ? 'traditional' : 'auto';
-    if (prefs.chineseScriptPreference === chineseScriptPreference) return;
-    await updatePrefs({ ...prefs, chineseScriptPreference });
+    await updatePrefs(current => {
+      if (current.chineseScriptPreference === chineseScriptPreference) return current;
+      return { ...current, chineseScriptPreference };
+    });
   };
 
   return (
