@@ -240,8 +240,14 @@ async fn run_download(
     // 经常不发 TLS close_notify 就关 TCP，rustls 0.22+ 把这当致命 unexpected_eof，
     // 实际数据已经收齐也算"下载失败"。SecureTransport 对 unclean close 容错。
     // (Volcengine WebSocket 那边继续用 rustls，那条链路稳定。)
+    //
+    // 不设 .timeout() —— 大模型文件 1 GB 起步，整体超时不合适；只设 connect_timeout
+    // 防止首次连接卡死。pool_idle_timeout 让连接早释放，避免 CDN 关掉旧连接但 hyper
+    // 还在用导致下次请求 EOF。
     let client = reqwest::Client::builder()
         .use_native_tls()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .pool_idle_timeout(std::time::Duration::from_secs(20))
         .build()
         .context("build reqwest client failed")?;
 
@@ -304,31 +310,16 @@ async fn run_download(
             model_id.hf_repo(),
             file.path
         );
-        // 自动 retry 一次：HF 大文件偶发瞬时网断很常见，不让用户手点重试。
-        // 连 cancel 信号也尊重——retry 时会再次检查。
-        let mut result = retry_download_one(&client, &url, &dest, cancel, |bytes| {
-            emit(
-                app,
-                DownloadProgress {
-                    model_id: model_id.as_str().into(),
-                    file: file.path.clone(),
-                    file_index: idx,
-                    file_count,
-                    bytes_downloaded: bytes_done_before_current + bytes,
-                    bytes_total: total_bytes,
-                    phase: DownloadPhase::Progress,
-                    error: None,
-                },
-            );
-        })
-        .await;
-        if result.is_err() && !cancel.load(Ordering::SeqCst) {
-            log::warn!(
-                "[local-asr] {} retry once after first failure",
-                file.path
-            );
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            result = retry_download_one(&client, &url, &dest, cancel, |bytes| {
+        // 大文件经常被 CDN 中途断流。Range 续传 + 指数退避 (1s, 4s, 16s) 多试几次，
+        // 不让用户手点。每次 retry 都从 .partial 当前长度断点续传，不会重复下载。
+        const MAX_ATTEMPTS: u32 = 4;
+        let mut result: Result<()> = Ok(());
+        for attempt in 1..=MAX_ATTEMPTS {
+            if cancel.load(Ordering::SeqCst) {
+                emit_cancelled(app, model_id, &file.path, idx, file_count, total_bytes);
+                return Ok(());
+            }
+            result = download_one(&client, &url, &dest, cancel, |bytes| {
                 emit(
                     app,
                     DownloadProgress {
@@ -344,6 +335,24 @@ async fn run_download(
                 );
             })
             .await;
+            if result.is_ok() || cancel.load(Ordering::SeqCst) {
+                break;
+            }
+            if attempt < MAX_ATTEMPTS {
+                let backoff = std::time::Duration::from_secs(1u64 << (2 * (attempt - 1)));
+                log::warn!(
+                    "[local-asr] {} attempt {}/{} failed: {:#}; sleeping {:?} then retry from byte {}",
+                    file.path,
+                    attempt,
+                    MAX_ATTEMPTS,
+                    result.as_ref().err().map(|e| e.to_string()).unwrap_or_default(),
+                    backoff,
+                    std::fs::metadata(dest.with_extension("partial"))
+                        .map(|m| m.len())
+                        .unwrap_or(0),
+                );
+                tokio::time::sleep(backoff).await;
+            }
         }
         match result {
             Ok(()) => {
@@ -391,17 +400,6 @@ async fn run_download(
         },
     );
     Ok(())
-}
-
-/// 下载单个文件到 `dest`；同名包装方便上层 retry 时复用所有参数。
-async fn retry_download_one(
-    client: &reqwest::Client,
-    url: &str,
-    dest: &Path,
-    cancel: &AtomicBool,
-    on_chunk: impl FnMut(u64),
-) -> Result<()> {
-    download_one(client, url, dest, cancel, on_chunk).await
 }
 
 /// 下载单个文件到 `dest`，失败/取消时**保留** `.partial` 用于续传（HTTP Range 头）。

@@ -43,6 +43,7 @@ import i18n, {
 } from '../i18n';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 import {
+  deleteLocalAsrModel,
   getLocalAsrSettings,
   listLocalAsrModels,
   type LocalAsrModelStatus,
@@ -1242,35 +1243,45 @@ function adapterDisplayName(adapter: HotkeyCapability['adapter'] | HotkeyStatus[
 }
 
 /// 本地 Qwen3-ASR 在 Settings → 服务商区里**不**让用户填空——展示当前激活模型
-/// 是否已下载，引导一键跳到「模型设置」页继续操作。
+/// 是否已下载、列出所有已下载模型 + 删除按钮，并提示性能/质量预期，引导跳到
+/// 「模型设置」页做下载。
 function LocalAsrProviderHint() {
   const { t } = useTranslation();
   const [settings, setSettings] = useState<LocalAsrSettings | null>(null);
   const [models, setModels] = useState<LocalAsrModelStatus[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const refresh = async () => {
+    try {
+      const [s, list] = await Promise.all([getLocalAsrSettings(), listLocalAsrModels()]);
+      setSettings(s);
+      setModels(list);
+    } catch (err) {
+      console.warn('[settings] load local asr status failed', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [s, list] = await Promise.all([getLocalAsrSettings(), listLocalAsrModels()]);
-        if (!cancelled) {
-          setSettings(s);
-          setModels(list);
-        }
-      } catch (err) {
-        console.warn('[settings] load local asr status failed', err);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    void refresh();
   }, []);
 
   const goToLocalAsr = () => {
     window.dispatchEvent(new CustomEvent(NAVIGATE_LOCAL_ASR_EVENT));
+  };
+
+  const handleDelete = async (modelId: string) => {
+    setDeletingId(modelId);
+    try {
+      await deleteLocalAsrModel(modelId);
+      await refresh();
+    } catch (err) {
+      console.warn('[settings] delete local model failed', err);
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   if (loading) {
@@ -1283,26 +1294,84 @@ function LocalAsrProviderHint() {
 
   const active = models.find(m => m.id === settings?.activeModel);
   const isReady = active?.isDownloaded ?? false;
+  const downloaded = models.filter(m => m.isDownloaded);
 
   return (
-    <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* 性能/质量预期警告 —— 用户硬要求要写清楚 */}
+      <div
+        style={{
+          padding: '10px 12px',
+          background: 'rgba(255, 215, 130, 0.18)',
+          borderRadius: 8,
+          fontSize: 12.5,
+          color: 'var(--ol-ink-2)',
+          lineHeight: 1.6,
+        }}>
+        ⚠️ {t('settings.providers.localAsrPerformanceWarning')}
+      </div>
+
       <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>
         {t('settings.providers.localAsrHint')}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+
+      {/* 当前激活模型状态 + 跳转按钮 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <Pill tone={isReady ? 'ok' : 'outline'} size="sm">
           {isReady
             ? t('settings.providers.localAsrReady', { model: active?.id ?? '' })
             : t('settings.providers.localAsrNotReady', { model: settings?.activeModel ?? '' })}
         </Pill>
-      </div>
-      <div>
         <Btn variant={isReady ? 'ghost' : 'primary'} size="sm" onClick={goToLocalAsr}>
           {isReady
             ? t('settings.providers.localAsrManage')
             : t('settings.providers.localAsrGoDownload')}
         </Btn>
       </div>
+
+      {/* 已下载模型列表 + 删除按钮（用户：已下载的项目要在旁边显示 + 提供删除） */}
+      {downloaded.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--ol-ink-4)', letterSpacing: '.04em', textTransform: 'uppercase' }}>
+            {t('settings.providers.localAsrDownloadedTitle')}
+          </div>
+          {downloaded.map(m => (
+            <div
+              key={m.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '6px 10px',
+                borderRadius: 6,
+                background: 'rgba(0,0,0,0.03)',
+                fontSize: 12.5,
+                color: 'var(--ol-ink-2)',
+              }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                <span style={{ fontWeight: 500 }}>{m.id}</span>
+                <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
+                  {formatBytes(m.downloadedBytes)}
+                </span>
+              </div>
+              <Btn
+                variant="ghost"
+                size="sm"
+                disabled={deletingId === m.id}
+                onClick={() => void handleDelete(m.id)}>
+                {t('settings.providers.localAsrDelete')}
+              </Btn>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(0)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }

@@ -209,6 +209,13 @@ export function LocalAsr() {
         desc={t('localAsr.desc')}
       />
 
+      {/* 性能/质量预期警告 —— 用户硬要求要写清楚 */}
+      <Card style={{ marginBottom: 16, background: 'rgba(255, 215, 130, 0.18)' }}>
+        <div style={{ fontSize: 13, color: 'var(--ol-ink-2)', lineHeight: 1.6 }}>
+          ⚠️ {t('localAsr.performanceWarning')}
+        </div>
+      </Card>
+
       {!engineAvailable && (
         <Card style={{ marginBottom: 16, background: 'rgba(255, 235, 200, 0.4)' }}>
           <div style={{ fontSize: 13, color: 'var(--ol-ink-2)' }}>
