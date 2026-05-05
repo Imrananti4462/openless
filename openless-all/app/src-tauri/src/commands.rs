@@ -125,9 +125,14 @@ pub fn set_credential(account: String, value: String) -> Result<(), String> {
 #[tauri::command]
 pub fn set_active_asr_provider(coord: CoordinatorState<'_>, provider: String) -> Result<(), String> {
     CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())?;
-    // 切到本地 ASR → 后台预加载模型，下次按 hotkey 时不必等数秒。
     if provider == crate::asr::local::PROVIDER_ID {
+        // 切到本地 ASR → 后台预加载模型，下次按 hotkey 时不必等数秒。
         coord.preload_local_asr_in_background();
+    } else {
+        // 切回云端 → 用户已不需要本地引擎，立刻释放 1.2GB+ RAM；不释放的话只会等到
+        // schedule_local_asr_release 的下一次 dictation 才触发，而切回云端后根本不会
+        // 再走 local 路径，引擎会驻留到进程退出。
+        coord.release_local_asr_engine();
     }
     Ok(())
 }
@@ -790,8 +795,16 @@ pub fn local_asr_cancel_download(
 }
 
 #[tauri::command]
-pub fn local_asr_delete_model(model_id: String) -> Result<(), String> {
+pub fn local_asr_delete_model(
+    coord: CoordinatorState<'_>,
+    model_id: String,
+) -> Result<(), String> {
     let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
+    // 如果内存里加载的就是要删的这个模型，先释放：否则 mmap 残留指向已 unlink 的文件，
+    // 且 RAM 直到下次切模型 / 用户手动按"释放"才回收。
+    if coord.local_asr_loaded_model().as_deref() == Some(id.as_str()) {
+        coord.release_local_asr_engine();
+    }
     crate::asr::local::models::delete_model(id).map_err(|e| e.to_string())
 }
 
