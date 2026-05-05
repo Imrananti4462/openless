@@ -12,8 +12,9 @@ use crate::permissions::{self, PermissionStatus};
 use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVault};
 use crate::polish::{LLMError, OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
 use crate::types::{
-    CredentialsStatus, DictationSession, DictionaryEntry, HotkeyCapability, HotkeyStatus,
-    PolishMode, QaHotkeyBinding, UserPreferences, VocabPresetStore, WindowsImeStatus,
+    ChineseScriptPreference, CredentialsStatus, DictationSession, DictionaryEntry,
+    HotkeyCapability, HotkeyStatus, PolishMode, QaHotkeyBinding, UserPreferences,
+    VocabPresetStore, WindowsImeStatus,
 };
 
 type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
@@ -223,7 +224,14 @@ async fn validate_llm_provider() -> Result<(), String> {
         model,
     ));
     provider
-        .polish("验证连接", PolishMode::Raw, &[], &[], None)
+        .polish(
+            "验证连接",
+            PolishMode::Raw,
+            &[],
+            &[],
+            ChineseScriptPreference::Auto,
+            None,
+        )
         .await
         .map(|_| ())
         .map_err(|e| match e {

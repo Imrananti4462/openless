@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::Utc;
+use ferrous_opencc::{config::BuiltinConfig, OpenCC};
 use parking_lot::Mutex;
 use tauri::{async_runtime, AppHandle, Emitter, Manager};
 use uuid::Uuid;
@@ -30,8 +31,8 @@ use crate::qa_hotkey::{QaHotkeyError, QaHotkeyEvent, QaHotkeyMonitor};
 use crate::recorder::{Recorder, RecorderError};
 use crate::selection::{capture_selection, SelectionContext};
 use crate::types::{
-    CapsulePayload, CapsuleState, DictationSession, HotkeyCapability, HotkeyMode, HotkeyStatus,
-    HotkeyStatusState, InsertStatus, PolishMode,
+    CapsulePayload, CapsuleState, ChineseScriptPreference, DictationSession, HotkeyCapability,
+    HotkeyMode, HotkeyStatus, HotkeyStatusState, InsertStatus, PolishMode,
 };
 #[cfg(target_os = "windows")]
 use crate::windows_ime_ipc::ImeSubmitTarget;
@@ -473,7 +474,9 @@ impl Coordinator {
 
     pub async fn repolish(&self, raw_text: String, mode: PolishMode) -> Result<String, String> {
         let hotwords = enabled_phrases(&self.inner);
-        let working_languages = self.inner.prefs.get().working_languages;
+        let prefs = self.inner.prefs.get();
+        let working_languages = prefs.working_languages;
+        let chinese_script_preference = prefs.chinese_script_preference;
         // repolish 是历史记录里手动重新润色，不再绑定原 session 的前台 app；
         // 当下用户调起的 app 才是相关上下文（如果可拿）。
         let front_app = capture_frontmost_app();
@@ -482,6 +485,7 @@ impl Coordinator {
             mode,
             &hotwords,
             &working_languages,
+            chinese_script_preference,
             front_app.as_deref(),
         )
         .await
@@ -1640,6 +1644,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let mode = prefs.default_mode;
     let hotword_strs = enabled_phrases(inner);
     let working_languages = prefs.working_languages.clone();
+    let chinese_script_preference = prefs.chinese_script_preference;
     let front_app = inner.state.lock().front_app.clone();
     let translation_target = prefs.translation_target_language.trim().to_string();
     let translation_active =
@@ -1655,6 +1660,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             &raw,
             &translation_target,
             &working_languages,
+            chinese_script_preference,
             front_app.as_deref(),
         )
         .await
@@ -1664,9 +1670,24 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             mode,
             &hotword_strs,
             &working_languages,
+            chinese_script_preference,
             front_app.as_deref(),
         )
         .await
+    };
+
+    // 仅在“ASR 直出文本”场景做强制简繁收敛，避免误伤成功的翻译/常规 LLM 输出：
+    // - 非翻译模式：mode=Raw（本来就不走润色）或润色失败回退 raw
+    // - 翻译模式：仅翻译失败回退 raw 时才收敛
+    let should_force_script = if translation_active {
+        polish_error.is_some()
+    } else {
+        mode == PolishMode::Raw || polish_error.is_some()
+    };
+    let polished = if should_force_script {
+        apply_chinese_script_preference(&polished, chinese_script_preference)
+    } else {
+        polished
     };
 
     // 原子化最后一次 cancel 检查 + 转 Inserting：
@@ -2154,6 +2175,27 @@ fn is_whisper_compatible_provider(id: &str) -> bool {
     matches!(id, "whisper" | "siliconflow" | "zhipu" | "groq")
 }
 
+fn apply_chinese_script_preference(text: &str, pref: ChineseScriptPreference) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+    let config = match pref {
+        ChineseScriptPreference::Simplified => Some(BuiltinConfig::T2s),
+        ChineseScriptPreference::Traditional => Some(BuiltinConfig::S2t),
+        ChineseScriptPreference::Auto => None,
+    };
+    let Some(config) = config else {
+        return text.to_string();
+    };
+    match OpenCC::from_config(config) {
+        Ok(converter) => converter.convert(text),
+        Err(err) => {
+            log::warn!("[coord] OpenCC init failed, skip script conversion: {err}");
+            text.to_string()
+        }
+    }
+}
+
 /// QA 路径专用：begin_qa_session 永远走 Volcengine 流式（低延迟要求），所以
 /// 凭据校验也只看 Volcengine 字段，不依赖 active_asr。dictation 路径请用
 /// `ensure_asr_credentials`。
@@ -2173,12 +2215,22 @@ async fn polish_or_passthrough(
     mode: PolishMode,
     hotwords: &[String],
     working_languages: &[String],
+    chinese_script_preference: ChineseScriptPreference,
     front_app: Option<&str>,
 ) -> (String, Option<String>) {
     if mode == PolishMode::Raw {
         return (raw.text.clone(), None);
     }
-    match polish_text(&raw.text, mode, hotwords, working_languages, front_app).await {
+    match polish_text(
+        &raw.text,
+        mode,
+        hotwords,
+        working_languages,
+        chinese_script_preference,
+        front_app,
+    )
+    .await
+    {
         Ok(s) => (s, None),
         Err(e) => {
             let reason = e.to_string();
@@ -2193,6 +2245,7 @@ async fn polish_text(
     mode: PolishMode,
     hotwords: &[String],
     working_languages: &[String],
+    chinese_script_preference: ChineseScriptPreference,
     front_app: Option<&str>,
 ) -> anyhow::Result<String> {
     let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
@@ -2208,7 +2261,14 @@ async fn polish_text(
     let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
     let provider = OpenAICompatibleLLMProvider::new(config);
     Ok(provider
-        .polish(raw, mode, hotwords, working_languages, front_app)
+        .polish(
+            raw,
+            mode,
+            hotwords,
+            working_languages,
+            chinese_script_preference,
+            front_app,
+        )
         .await?)
 }
 
@@ -2217,9 +2277,18 @@ async fn translate_or_passthrough(
     raw: &RawTranscript,
     target_language: &str,
     working_languages: &[String],
+    chinese_script_preference: ChineseScriptPreference,
     front_app: Option<&str>,
 ) -> (String, Option<String>) {
-    match translate_text(&raw.text, target_language, working_languages, front_app).await {
+    match translate_text(
+        &raw.text,
+        target_language,
+        working_languages,
+        chinese_script_preference,
+        front_app,
+    )
+    .await
+    {
         Ok(s) => (s, None),
         Err(e) => {
             let reason = e.to_string();
@@ -2233,6 +2302,7 @@ async fn translate_text(
     raw: &str,
     target_language: &str,
     working_languages: &[String],
+    chinese_script_preference: ChineseScriptPreference,
     front_app: Option<&str>,
 ) -> anyhow::Result<String> {
     let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
@@ -2248,7 +2318,13 @@ async fn translate_text(
     let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
     let provider = OpenAICompatibleLLMProvider::new(config);
     Ok(provider
-        .translate_to(raw, target_language, working_languages, front_app)
+        .translate_to(
+            raw,
+            target_language,
+            working_languages,
+            chinese_script_preference,
+            front_app,
+        )
         .await?)
 }
 
@@ -2574,6 +2650,7 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     let prefs = inner.prefs.get();
     let working_languages = prefs.working_languages.clone();
+    let chinese_script_preference = prefs.chinese_script_preference;
     let (messages_for_llm, front_app) = {
         let st = inner.qa_state.lock();
         (st.messages.clone(), st.front_app.clone())
@@ -2612,6 +2689,7 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     let answer = match answer_chat_dispatch(
         &messages_for_llm,
         &working_languages,
+        chinese_script_preference,
         front_app.as_deref(),
         on_delta,
         should_cancel,
@@ -2759,6 +2837,7 @@ fn cancel_qa_session(inner: &Arc<Inner>) {
 async fn answer_chat_dispatch<F, C>(
     messages: &[crate::types::QaChatMessage],
     working_languages: &[String],
+    chinese_script_preference: ChineseScriptPreference,
     front_app: Option<&str>,
     on_delta: F,
     should_cancel: C,
@@ -2782,6 +2861,7 @@ where
         .answer_chat_streaming(
             messages,
             working_languages,
+            chinese_script_preference,
             front_app,
             on_delta,
             should_cancel,

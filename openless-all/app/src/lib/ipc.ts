@@ -51,6 +51,7 @@ const mockSettings: UserPreferences = {
   allowNonTsfInsertionFallback: true,
   workingLanguages: ['简体中文'],
   translationTargetLanguage: '',
+  chineseScriptPreference: 'auto',
   qaHotkey: { primary: ';', modifiers: ['cmd', 'shift'] },
   qaSaveHistory: false,
   localAsrActiveModel: 'qwen3-asr-0.6b',
